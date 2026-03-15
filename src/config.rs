@@ -49,11 +49,10 @@ impl Default for Config {
 /// Checks `JJ_STATUS_DAEMON_SOCKET_PATH` env var first, then falls back
 /// to `/tmp/jj-status-daemon-$USER.sock`.
 pub fn socket_path() -> PathBuf {
-    if let Ok(path) = std::env::var("JJ_STATUS_DAEMON_SOCKET_PATH") {
-        if !path.is_empty() {
+    if let Ok(path) = std::env::var("JJ_STATUS_DAEMON_SOCKET_PATH")
+        && !path.is_empty() {
             return PathBuf::from(path);
         }
-    }
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
     PathBuf::from(format!("/tmp/jj-status-daemon-{user}.sock"))
 }

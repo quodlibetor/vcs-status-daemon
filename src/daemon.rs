@@ -1,26 +1,39 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::jj::{format_status, query_jj_status};
 use crate::protocol::{Request, Response};
-use crate::watcher::{watch_repo, RepoWatcher, WatchEvent};
+use crate::watcher::{RepoWatcher, WatchEvent, watch_repo};
 
 struct DaemonState {
     cache: HashMap<PathBuf, String>,
     watchers: HashMap<PathBuf, RepoWatcher>,
+    /// Maps arbitrary directories to their jj repo root. Negatives are not cached.
+    dir_to_repo: HashMap<PathBuf, PathBuf>,
     last_query: Instant,
     config: Config,
 }
 
-pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
+fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    loop {
+        if dir.join(".jj").is_dir() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
 
+pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
     // Clean up stale socket
     if socket_path.exists() {
         if tokio::net::UnixStream::connect(&socket_path).await.is_err() {
@@ -43,6 +56,7 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
     let state = Arc::new(Mutex::new(DaemonState {
         cache: HashMap::new(),
         watchers: HashMap::new(),
+        dir_to_repo: HashMap::new(),
         last_query: Instant::now(),
         config: config.clone(),
     }));
@@ -111,23 +125,44 @@ async fn handle_connection(
 
     match request {
         Request::Query { repo_path } => {
-            let repo_path = PathBuf::from(&repo_path)
+            let query_path = PathBuf::from(&repo_path)
                 .canonicalize()
                 .unwrap_or_else(|_| PathBuf::from(&repo_path));
 
-            let (cached, config) = {
+            // Resolve the jj repo root from the given path
+            let (repo_path, cached, config) = {
                 let mut st = state.lock().await;
                 st.last_query = Instant::now();
 
-                if !st.watchers.contains_key(&repo_path) {
-                    if let Ok(watcher) = watch_repo(&repo_path, watch_tx.clone()) {
+                let repo_root = if let Some(cached_root) = st.dir_to_repo.get(&query_path) {
+                    Some(cached_root.clone())
+                } else if let Some(root) = find_repo_root(&query_path) {
+                    st.dir_to_repo.insert(query_path, root.clone());
+                    Some(root)
+                } else {
+                    // Not in a jj repo — don't cache negatives
+                    None
+                };
+
+                let Some(repo_path) = repo_root else {
+                    drop(st);
+                    return send_response(
+                        &mut writer,
+                        Response::Status {
+                            formatted: String::new(),
+                        },
+                    )
+                    .await;
+                };
+
+                if !st.watchers.contains_key(&repo_path)
+                    && let Ok(watcher) = watch_repo(&repo_path, watch_tx.clone()) {
                         st.watchers.insert(repo_path.clone(), watcher);
                     }
-                }
 
                 let cached = st.cache.get(&repo_path).cloned();
                 let config = st.config.clone();
-                (cached, config)
+                (repo_path, cached, config)
             };
 
             let formatted = if let Some(cached) = cached {
@@ -136,11 +171,21 @@ async fn handle_connection(
                 match query_jj_status(&repo_path, &config, false).await {
                     Ok(status) => {
                         let formatted = format_status(&status, &config.format, config.color);
-                        state.lock().await.cache.insert(repo_path, formatted.clone());
+                        state
+                            .lock()
+                            .await
+                            .cache
+                            .insert(repo_path, formatted.clone());
                         formatted
                     }
                     Err(e) => {
-                        return send_response(&mut writer, Response::Error { message: e.to_string() }).await;
+                        return send_response(
+                            &mut writer,
+                            Response::Error {
+                                message: e.to_string(),
+                            },
+                        )
+                        .await;
                     }
                 }
             };
@@ -219,6 +264,33 @@ mod tests {
     use tokio::process::Command;
     use tokio::time::Duration;
 
+    #[test]
+    fn test_find_repo_root() {
+        let dir = TempDir::new().unwrap();
+        let jj_dir = dir.path().join(".jj");
+        std::fs::create_dir(&jj_dir).unwrap();
+
+        let sub = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        assert_eq!(find_repo_root(&sub), Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_repo_root_at_root() {
+        let dir = TempDir::new().unwrap();
+        let jj_dir = dir.path().join(".jj");
+        std::fs::create_dir(&jj_dir).unwrap();
+
+        assert_eq!(find_repo_root(dir.path()), Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_repo_root_not_found() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(find_repo_root(dir.path()), None);
+    }
+
     async fn create_jj_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
         let output = Command::new("jj")
@@ -244,10 +316,7 @@ mod tests {
     }
 
     fn temp_socket_path(suffix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "jj-test-{}-{suffix}.sock",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("jj-test-{}-{suffix}.sock", std::process::id()))
     }
 
     #[tokio::test]
@@ -281,6 +350,100 @@ mod tests {
         // Shutdown
         let resp = send_request(&socket_path, &Request::Shutdown).await;
         assert_eq!(resp, Response::Ok);
+        daemon.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_daemon_resolves_subdirectory() {
+        let dir = create_jj_repo().await;
+        let sub = dir.path().join("src").join("nested");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let socket_path = temp_socket_path("subdir");
+        let _ = std::fs::remove_file(&socket_path);
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+
+        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Query from a subdirectory — daemon should resolve the repo root
+        let resp = send_request(
+            &socket_path,
+            &Request::Query {
+                repo_path: sub.to_string_lossy().to_string(),
+            },
+        )
+        .await;
+
+        match resp {
+            Response::Status { formatted } => {
+                assert!(
+                    !formatted.is_empty(),
+                    "expected non-empty status from subdirectory query"
+                );
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+
+        // Query from the repo root should return the same result (cached via dir_to_repo)
+        let resp2 = send_request(
+            &socket_path,
+            &Request::Query {
+                repo_path: dir.path().to_string_lossy().to_string(),
+            },
+        )
+        .await;
+
+        match resp2 {
+            Response::Status { formatted } => {
+                assert!(
+                    !formatted.is_empty(),
+                    "expected non-empty status from root query"
+                );
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+
+        let _ = send_request(&socket_path, &Request::Shutdown).await;
+        daemon.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_daemon_not_a_repo() {
+        let dir = TempDir::new().unwrap(); // no jj init
+
+        let socket_path = temp_socket_path("norepo");
+        let _ = std::fs::remove_file(&socket_path);
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+
+        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let resp = send_request(
+            &socket_path,
+            &Request::Query {
+                repo_path: dir.path().to_string_lossy().to_string(),
+            },
+        )
+        .await;
+
+        match resp {
+            Response::Status { formatted } => {
+                assert!(
+                    formatted.is_empty(),
+                    "expected empty status for non-repo, got: {formatted:?}"
+                );
+            }
+            other => panic!("expected empty Status, got {other:?}"),
+        }
+
+        let _ = send_request(&socket_path, &Request::Shutdown).await;
         daemon.await.unwrap().unwrap();
     }
 
@@ -359,7 +522,10 @@ mod tests {
             Response::Status { formatted } => formatted,
             other => panic!("expected Status, got {other:?}"),
         };
-        assert!(!first.contains("changed"), "first should not contain 'changed': {first:?}");
+        assert!(
+            !first.contains("changed"),
+            "first should not contain 'changed': {first:?}"
+        );
 
         // Make a change
         Command::new("jj")
@@ -385,8 +551,10 @@ mod tests {
             other => panic!("expected Status, got {other:?}"),
         };
 
-        assert!(second.contains("changed"),
-            "expected cache to update with description, got: {second:?}");
+        assert!(
+            second.contains("changed"),
+            "expected cache to update with description, got: {second:?}"
+        );
 
         let _ = send_request(&socket_path, &Request::Shutdown).await;
         daemon.await.unwrap().unwrap();
@@ -444,12 +612,30 @@ mod tests {
             Response::Status { formatted } => formatted,
             other => panic!("expected Status for repo B, got {other:?}"),
         };
-        assert!(status_a.contains("main"), "repo A round 1: expected 'main', got: {status_a:?}");
-        assert!(!status_a.contains("develop"), "repo A round 1: should not have 'develop', got: {status_a:?}");
-        assert!(status_b.contains("develop"), "repo B round 1: expected 'develop', got: {status_b:?}");
-        assert!(!status_b.contains("main"), "repo B round 1: should not have 'main', got: {status_b:?}");
-        assert!(status_a.contains("EMPTY"), "repo A round 1: expected EMPTY, got: {status_a:?}");
-        assert!(status_b.contains("EMPTY"), "repo B round 1: expected EMPTY, got: {status_b:?}");
+        assert!(
+            status_a.contains("main"),
+            "repo A round 1: expected 'main', got: {status_a:?}"
+        );
+        assert!(
+            !status_a.contains("develop"),
+            "repo A round 1: should not have 'develop', got: {status_a:?}"
+        );
+        assert!(
+            status_b.contains("develop"),
+            "repo B round 1: expected 'develop', got: {status_b:?}"
+        );
+        assert!(
+            !status_b.contains("main"),
+            "repo B round 1: should not have 'main', got: {status_b:?}"
+        );
+        assert!(
+            status_a.contains("EMPTY"),
+            "repo A round 1: expected EMPTY, got: {status_a:?}"
+        );
+        assert!(
+            status_b.contains("EMPTY"),
+            "repo B round 1: expected EMPTY, got: {status_b:?}"
+        );
 
         // Mutate both repos: describe repo A, write a file in repo B
         Command::new("jj")
@@ -459,7 +645,9 @@ mod tests {
             .await
             .unwrap();
 
-        tokio::fs::write(dir_b.path().join("hello.txt"), "world\n").await.unwrap();
+        tokio::fs::write(dir_b.path().join("hello.txt"), "world\n")
+            .await
+            .unwrap();
 
         // Wait for watchers + debounce + refresh (two repos refresh sequentially)
         tokio::time::sleep(Duration::from_millis(5000)).await;
@@ -477,12 +665,30 @@ mod tests {
             Response::Status { formatted } => formatted,
             other => panic!("expected Status for repo B round 2, got {other:?}"),
         };
-        assert!(status_a.contains("alpha-change"), "repo A round 2: expected 'alpha-change', got: {status_a:?}");
-        assert!(status_a.contains("main"), "repo A round 2: expected 'main', got: {status_a:?}");
-        assert!(!status_a.contains("develop"), "repo A round 2: should not have 'develop', got: {status_a:?}");
-        assert!(status_b.contains("develop"), "repo B round 2: expected 'develop', got: {status_b:?}");
-        assert!(!status_b.contains("main"), "repo B round 2: should not have 'main', got: {status_b:?}");
-        assert!(!status_b.contains("EMPTY"), "repo B round 2: should not be EMPTY after file write, got: {status_b:?}");
+        assert!(
+            status_a.contains("alpha-change"),
+            "repo A round 2: expected 'alpha-change', got: {status_a:?}"
+        );
+        assert!(
+            status_a.contains("main"),
+            "repo A round 2: expected 'main', got: {status_a:?}"
+        );
+        assert!(
+            !status_a.contains("develop"),
+            "repo A round 2: should not have 'develop', got: {status_a:?}"
+        );
+        assert!(
+            status_b.contains("develop"),
+            "repo B round 2: expected 'develop', got: {status_b:?}"
+        );
+        assert!(
+            !status_b.contains("main"),
+            "repo B round 2: should not have 'main', got: {status_b:?}"
+        );
+        assert!(
+            !status_b.contains("EMPTY"),
+            "repo B round 2: should not be EMPTY after file write, got: {status_b:?}"
+        );
 
         // Mutate again: describe repo B, add a bookmark to repo A
         Command::new("jj")
@@ -514,14 +720,38 @@ mod tests {
             Response::Status { formatted } => formatted,
             other => panic!("expected Status for repo B round 3, got {other:?}"),
         };
-        assert!(status_a.contains("main"), "repo A round 3: expected 'main', got: {status_a:?}");
-        assert!(status_a.contains("feature"), "repo A round 3: expected 'feature', got: {status_a:?}");
-        assert!(status_a.contains("alpha-change"), "repo A round 3: expected 'alpha-change', got: {status_a:?}");
-        assert!(!status_a.contains("develop"), "repo A round 3: should not have 'develop', got: {status_a:?}");
-        assert!(status_b.contains("beta-change"), "repo B round 3: expected 'beta-change', got: {status_b:?}");
-        assert!(status_b.contains("develop"), "repo B round 3: expected 'develop', got: {status_b:?}");
-        assert!(!status_b.contains("main"), "repo B round 3: should not have 'main', got: {status_b:?}");
-        assert!(!status_b.contains("feature"), "repo B round 3: should not have 'feature', got: {status_b:?}");
+        assert!(
+            status_a.contains("main"),
+            "repo A round 3: expected 'main', got: {status_a:?}"
+        );
+        assert!(
+            status_a.contains("feature"),
+            "repo A round 3: expected 'feature', got: {status_a:?}"
+        );
+        assert!(
+            status_a.contains("alpha-change"),
+            "repo A round 3: expected 'alpha-change', got: {status_a:?}"
+        );
+        assert!(
+            !status_a.contains("develop"),
+            "repo A round 3: should not have 'develop', got: {status_a:?}"
+        );
+        assert!(
+            status_b.contains("beta-change"),
+            "repo B round 3: expected 'beta-change', got: {status_b:?}"
+        );
+        assert!(
+            status_b.contains("develop"),
+            "repo B round 3: expected 'develop', got: {status_b:?}"
+        );
+        assert!(
+            !status_b.contains("main"),
+            "repo B round 3: should not have 'main', got: {status_b:?}"
+        );
+        assert!(
+            !status_b.contains("feature"),
+            "repo B round 3: should not have 'feature', got: {status_b:?}"
+        );
 
         let _ = send_request(&socket_path, &Request::Shutdown).await;
         daemon.await.unwrap().unwrap();

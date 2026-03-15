@@ -113,10 +113,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_connects_to_running_daemon() {
         let dir = create_jj_repo().await;
-        let sock = std::env::temp_dir().join(format!(
-            "jj-client-test-{}.sock",
-            std::process::id()
-        ));
+        let sock = std::env::temp_dir().join(format!("jj-client-test-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&sock);
 
         // Point both daemon and client at the same test socket

@@ -65,7 +65,11 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
-pub async fn query_jj_status(repo_path: &Path, config: &Config, ignore_working_copy: bool) -> Result<JjStatus> {
+pub async fn query_jj_status(
+    repo_path: &Path,
+    config: &Config,
+    ignore_working_copy: bool,
+) -> Result<JjStatus> {
     let iwc: &[&str] = if ignore_working_copy {
         &["--ignore-working-copy"]
     } else {
@@ -86,7 +90,11 @@ pub async fn query_jj_status(repo_path: &Path, config: &Config, ignore_working_c
     let iwc_owned2 = iwc_owned.clone();
     let iwc_owned3 = iwc_owned.clone();
 
-    let color_flag = if config.color { "--color=always" } else { "--color=never" };
+    let color_flag = if config.color {
+        "--color=always"
+    } else {
+        "--color=never"
+    };
 
     let commit_fut = async {
         let mut args = vec!["log", "-r", "@", "--no-graph", color_flag, "-R", &repo_str];
@@ -115,7 +123,8 @@ pub async fn query_jj_status(repo_path: &Path, config: &Config, ignore_working_c
         run_jj(repo_path, &args).await
     };
 
-    let (commit_out, bookmark_out, diff_out) = tokio::try_join!(commit_fut, bookmark_fut, diff_fut)?;
+    let (commit_out, bookmark_out, diff_out) =
+        tokio::try_join!(commit_fut, bookmark_fut, diff_fut)?;
 
     let mut status = JjStatus::default();
 
@@ -227,10 +236,25 @@ pub fn format_status(status: &JjStatus, template: &str, color: bool) -> String {
     } else {
         let empty = "";
         for name in [
-            "RST", "BOLD", "DIM",
-            "BLACK", "RED", "GREEN", "YELLOW", "BLUE", "MAGENTA", "CYAN", "WHITE",
-            "BRIGHT_BLACK", "BRIGHT_RED", "BRIGHT_GREEN", "BRIGHT_YELLOW",
-            "BRIGHT_BLUE", "BRIGHT_MAGENTA", "BRIGHT_CYAN", "BRIGHT_WHITE",
+            "RST",
+            "BOLD",
+            "DIM",
+            "BLACK",
+            "RED",
+            "GREEN",
+            "YELLOW",
+            "BLUE",
+            "MAGENTA",
+            "CYAN",
+            "WHITE",
+            "BRIGHT_BLACK",
+            "BRIGHT_RED",
+            "BRIGHT_GREEN",
+            "BRIGHT_YELLOW",
+            "BRIGHT_BLUE",
+            "BRIGHT_MAGENTA",
+            "BRIGHT_CYAN",
+            "BRIGHT_WHITE",
         ] {
             ctx.insert(name, empty);
         }
@@ -270,7 +294,11 @@ mod tests {
             .output()
             .await
             .unwrap();
-        assert!(output.status.success(), "jj git init failed: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "jj git init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         dir
     }
 
@@ -281,14 +309,22 @@ mod tests {
             .output()
             .await
             .unwrap();
-        assert!(output.status.success(), "jj {:?} failed: {}", args, String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "jj {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
         String::from_utf8_lossy(&output.stdout).to_string()
     }
 
     #[tokio::test]
     async fn test_empty_repo() {
         let dir = create_jj_repo().await;
-        let config = Config { color: false, ..Default::default() };
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
         let status = query_jj_status(dir.path(), &config, false).await.unwrap();
         assert!(!status.change_id.is_empty());
         assert!(status.empty);
@@ -299,7 +335,10 @@ mod tests {
     async fn test_with_description() {
         let dir = create_jj_repo().await;
         jj_cmd(dir.path(), &["describe", "-m", "hello world"]).await;
-        let config = Config { color: false, ..Default::default() };
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
         let status = query_jj_status(dir.path(), &config, false).await.unwrap();
         assert_eq!(status.description, "hello world");
     }
@@ -308,9 +347,17 @@ mod tests {
     async fn test_with_bookmark() {
         let dir = create_jj_repo().await;
         jj_cmd(dir.path(), &["bookmark", "create", "main", "-r", "@"]).await;
-        let config = Config { color: false, ..Default::default() };
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
         let status = query_jj_status(dir.path(), &config, false).await.unwrap();
-        assert!(status.bookmarks.iter().any(|b| b.name == "main" && b.distance == 0 && b.display == "main"));
+        assert!(
+            status
+                .bookmarks
+                .iter()
+                .any(|b| b.name == "main" && b.distance == 0 && b.display == "main")
+        );
     }
 
     #[tokio::test]
@@ -318,16 +365,27 @@ mod tests {
         let dir = create_jj_repo().await;
         jj_cmd(dir.path(), &["bookmark", "create", "main", "-r", "@"]).await;
         jj_cmd(dir.path(), &["new"]).await;
-        let config = Config { color: false, ..Default::default() };
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
         let status = query_jj_status(dir.path(), &config, false).await.unwrap();
-        assert!(status.bookmarks.iter().any(|b| b.name == "main" && b.distance == 1 && b.display == "main+1"));
+        assert!(
+            status
+                .bookmarks
+                .iter()
+                .any(|b| b.name == "main" && b.distance == 1 && b.display == "main+1")
+        );
     }
 
     #[tokio::test]
     async fn test_diff_stats() {
         let dir = create_jj_repo().await;
         std::fs::write(dir.path().join("test.txt"), "hello\nworld\n").unwrap();
-        let config = Config { color: false, ..Default::default() };
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
         let status = query_jj_status(dir.path(), &config, false).await.unwrap();
         assert!(status.files_changed >= 1);
         assert!(status.lines_added > 0);
@@ -340,7 +398,11 @@ mod tests {
             commit_id: "abc1".to_string(),
             description: "test".to_string(),
             empty: false,
-            bookmarks: vec![Bookmark { name: "main".into(), distance: 0, display: "main".into() }],
+            bookmarks: vec![Bookmark {
+                name: "main".into(),
+                distance: 0,
+                display: "main".into(),
+            }],
             files_changed: 3,
             lines_added: 10,
             lines_removed: 5,
@@ -368,7 +430,11 @@ mod tests {
             change_id: "mrtu".to_string(),
             commit_id: "abc1".to_string(),
             description: "my change".to_string(),
-            bookmarks: vec![Bookmark { name: "main".into(), distance: 0, display: "main".into() }],
+            bookmarks: vec![Bookmark {
+                name: "main".into(),
+                distance: 0,
+                display: "main".into(),
+            }],
             ..Default::default()
         };
         let tmpl = "{{ commit_id }}:{{ change_id }} {{ description }}";
@@ -403,7 +469,11 @@ format = '''
             // With bookmarks and metrics
             JjStatus {
                 change_id: "mrtu".into(),
-                bookmarks: vec![Bookmark { name: "main".into(), distance: 0, display: "main".into() }],
+                bookmarks: vec![Bookmark {
+                    name: "main".into(),
+                    distance: 0,
+                    display: "main".into(),
+                }],
                 files_changed: 3,
                 lines_added: 10,
                 lines_removed: 5,
@@ -413,8 +483,16 @@ format = '''
             JjStatus {
                 change_id: "abcd".into(),
                 bookmarks: vec![
-                    Bookmark { name: "feat".into(), distance: 0, display: "feat".into() },
-                    Bookmark { name: "main".into(), distance: 2, display: "main+2".into() },
+                    Bookmark {
+                        name: "feat".into(),
+                        distance: 0,
+                        display: "feat".into(),
+                    },
+                    Bookmark {
+                        name: "main".into(),
+                        distance: 2,
+                        display: "main+2".into(),
+                    },
                 ],
                 files_changed: 1,
                 lines_added: 7,
