@@ -3,10 +3,12 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone)]
-pub struct WatchEvent {
-    pub repo_path: PathBuf,
-    pub working_copy_changed: bool,
+pub enum WatchEvent {
+    Change {
+        repo_path: PathBuf,
+        working_copy_changed: bool,
+    },
+    Flush(tokio::sync::oneshot::Sender<()>),
 }
 
 pub struct RepoWatcher {
@@ -43,7 +45,7 @@ pub fn watch_repo(repo_path: &Path, tx: mpsc::UnboundedSender<WatchEvent>) -> Re
                 return;
             }
 
-            let _ = tx.send(WatchEvent {
+            let _ = tx.send(WatchEvent::Change {
                 repo_path: repo_path_owned.clone(),
                 working_copy_changed,
             });
@@ -102,7 +104,10 @@ mod tests {
             .await
             .expect("timeout waiting for watch event")
             .expect("channel closed");
-        assert_eq!(event.repo_path, dir.path());
+        match event {
+            WatchEvent::Change { repo_path, .. } => assert_eq!(repo_path, dir.path()),
+            WatchEvent::Flush(_) => panic!("unexpected Flush event"),
+        }
     }
 
     #[tokio::test]
@@ -120,12 +125,14 @@ mod tests {
         let mut found = false;
         for _ in 0..20 {
             match timeout(Duration::from_secs(5), rx.recv()).await {
-                Ok(Some(event)) => {
-                    if event.working_copy_changed {
-                        found = true;
-                        break;
-                    }
+                Ok(Some(WatchEvent::Change {
+                    working_copy_changed: true,
+                    ..
+                })) => {
+                    found = true;
+                    break;
                 }
+                Ok(Some(_)) => continue,
                 _ => break,
             }
         }

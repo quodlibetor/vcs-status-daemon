@@ -2,18 +2,45 @@
 name = "jj-status-daemon"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/quodlibetor/jj-status-daemon"
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "net", "process", "time", "signal", "io-util", "macros", "sync", "fs"] }
-notify = "7"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
+anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
-anyhow = "1"
+notify = "8.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tera = { version = "1.20", default-features = false, features = ["builtins"] }
+tokio = { version = "1", features = [
+  "rt",
+  "net",
+  "process",
+  "time",
+  "signal",
+  "io-util",
+  "macros",
+  "sync",
+  "fs",
+] }
+toml = "1.0.6"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["rt", "net", "process", "time", "signal", "io-util", "macros", "sync", "fs", "test-util"] }
+tokio = { version = "1", features = [
+  "rt",
+  "net",
+  "process",
+  "time",
+  "signal",
+  "io-util",
+  "macros",
+  "sync",
+  "fs",
+  "test-util",
+] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

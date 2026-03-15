@@ -459,7 +459,7 @@ format = '''
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 
-        let cases = vec![
+        let cases = [
             // Empty repo
             JjStatus {
                 change_id: "mrtu".into(),

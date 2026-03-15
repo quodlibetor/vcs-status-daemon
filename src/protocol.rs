@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type")]
 pub enum Request {
     Query { repo_path: String },
+    Flush,
     Shutdown,
 }
 

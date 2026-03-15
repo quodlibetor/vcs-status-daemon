@@ -156,9 +156,10 @@ async fn handle_connection(
                 };
 
                 if !st.watchers.contains_key(&repo_path)
-                    && let Ok(watcher) = watch_repo(&repo_path, watch_tx.clone()) {
-                        st.watchers.insert(repo_path.clone(), watcher);
-                    }
+                    && let Ok(watcher) = watch_repo(&repo_path, watch_tx.clone())
+                {
+                    st.watchers.insert(repo_path.clone(), watcher);
+                }
 
                 let cached = st.cache.get(&repo_path).cloned();
                 let config = st.config.clone();
@@ -192,6 +193,12 @@ async fn handle_connection(
 
             send_response(&mut writer, Response::Status { formatted }).await
         }
+        Request::Flush => {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let _ = watch_tx.send(WatchEvent::Flush(tx));
+            let _ = rx.await;
+            send_response(&mut writer, Response::Ok).await
+        }
         Request::Shutdown => {
             send_response(&mut writer, Response::Ok).await?;
             shutdown.notify_one();
@@ -210,6 +217,42 @@ async fn send_response(
     Ok(())
 }
 
+fn collect_change(wc_changed: &mut HashMap<PathBuf, bool>, event: WatchEvent) {
+    match event {
+        WatchEvent::Change {
+            repo_path,
+            working_copy_changed,
+        } => {
+            if working_copy_changed {
+                wc_changed.insert(repo_path, true);
+            } else {
+                wc_changed.entry(repo_path).or_insert(false);
+            }
+        }
+        WatchEvent::Flush(_) => {} // handled by caller
+    }
+}
+
+async fn process_pending(
+    state: &Arc<Mutex<DaemonState>>,
+    wc_changed: &mut HashMap<PathBuf, bool>,
+) {
+    let repos: Vec<(PathBuf, bool)> = wc_changed.drain().collect();
+    for (repo_path, needs_snapshot) in repos {
+        let config = state.lock().await.config.clone();
+        let ignore_wc = !needs_snapshot;
+        match query_jj_status(&repo_path, &config, ignore_wc).await {
+            Ok(status) => {
+                let formatted = format_status(&status, &config.format, config.color);
+                state.lock().await.cache.insert(repo_path, formatted);
+            }
+            Err(e) => {
+                eprintln!("refresh error for {}: {e}", repo_path.display());
+            }
+        }
+    }
+}
+
 async fn refresh_task(
     state: Arc<Mutex<DaemonState>>,
     mut watch_rx: mpsc::UnboundedReceiver<WatchEvent>,
@@ -221,36 +264,32 @@ async fn refresh_task(
             return;
         };
 
-        if event.working_copy_changed {
-            wc_changed.insert(event.repo_path.clone(), true);
-        } else {
-            wc_changed.entry(event.repo_path.clone()).or_insert(false);
+        // Handle flush immediately if nothing is pending
+        if let WatchEvent::Flush(tx) = event {
+            process_pending(&state, &mut wc_changed).await;
+            let _ = tx.send(());
+            continue;
         }
+
+        collect_change(&mut wc_changed, event);
 
         let debounce_ms = state.lock().await.config.debounce_ms;
         tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
 
+        // Drain remaining events, stopping at a flush
+        let mut flush_tx = None;
         while let Ok(event) = watch_rx.try_recv() {
-            if event.working_copy_changed {
-                wc_changed.insert(event.repo_path.clone(), true);
-            } else {
-                wc_changed.entry(event.repo_path.clone()).or_insert(false);
+            if let WatchEvent::Flush(tx) = event {
+                flush_tx = Some(tx);
+                break;
             }
+            collect_change(&mut wc_changed, event);
         }
 
-        let repos: Vec<(PathBuf, bool)> = wc_changed.drain().collect();
-        for (repo_path, needs_snapshot) in repos {
-            let config = state.lock().await.config.clone();
-            let ignore_wc = !needs_snapshot;
-            match query_jj_status(&repo_path, &config, ignore_wc).await {
-                Ok(status) => {
-                    let formatted = format_status(&status, &config.format, config.color);
-                    state.lock().await.cache.insert(repo_path, formatted);
-                }
-                Err(e) => {
-                    eprintln!("refresh error for {}: {e}", repo_path.display());
-                }
-            }
+        process_pending(&state, &mut wc_changed).await;
+
+        if let Some(tx) = flush_tx {
+            let _ = tx.send(());
         }
     }
 }
@@ -317,6 +356,14 @@ mod tests {
 
     fn temp_socket_path(suffix: &str) -> PathBuf {
         std::env::temp_dir().join(format!("jj-test-{}-{suffix}.sock", std::process::id()))
+    }
+
+    /// Wait for filesystem events to arrive, then flush the daemon's refresh task.
+    async fn flush_daemon(socket_path: &std::path::Path) {
+        // Brief sleep to let filesystem events propagate to the watcher
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let resp = send_request(socket_path, &Request::Flush).await;
+        assert_eq!(resp, Response::Ok);
     }
 
     #[tokio::test]
@@ -535,8 +582,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Wait for debounce + refresh
-        tokio::time::sleep(Duration::from_millis(5000)).await;
+        flush_daemon(&socket_path).await;
 
         // Second query - should reflect the change
         let resp = send_request(
@@ -649,8 +695,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Wait for watchers + debounce + refresh (two repos refresh sequentially)
-        tokio::time::sleep(Duration::from_millis(5000)).await;
+        flush_daemon(&socket_path).await;
 
         // Round 2: concurrent queries after mutations
         let (resp_a, resp_b) = tokio::join!(
@@ -705,7 +750,7 @@ mod tests {
             .await
             .unwrap();
 
-        tokio::time::sleep(Duration::from_millis(5000)).await;
+        flush_daemon(&socket_path).await;
 
         // Round 3: verify both caches updated independently
         let (resp_a, resp_b) = tokio::join!(
