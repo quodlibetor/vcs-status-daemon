@@ -1,0 +1,7 @@
+[tools]
+"cargo:cargo-nextest" = "latest"
+cargo-dist = "latest"
+
+[tasks.test]
+description = "Run tests with cargo nextest"
+run = "cargo nextest run"

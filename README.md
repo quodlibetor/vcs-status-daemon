@@ -2,6 +2,8 @@
 
 A background daemon that pre-caches [Jujutsu](https://github.com/jj-vcs/jj) repository status, so shell prompts can retrieve it in milliseconds instead of waiting for `jj` to run on every prompt.
 
+> 🤖🪣 This project is entirely AI generated but it seems to work
+
 ## Problem
 
 Jujutsu can be slow in large repositories. Shell prompt integrations (like starship-jj) that call `jj` on every prompt add noticeable latency. This daemon watches for repository changes via filesystem notifications and keeps a formatted status string in memory, ready to serve instantly.
