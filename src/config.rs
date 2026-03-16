@@ -1,7 +1,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::protocol::VcsKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -86,6 +88,41 @@ pub fn socket_path() -> PathBuf {
     }
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
     PathBuf::from(format!("/tmp/vcs-status-daemon-{user}.sock"))
+}
+
+/// Find the repo root and VCS kind. jj wins if both `.jj/` and `.git/` are present.
+pub fn find_repo_root(start: &Path) -> Option<(PathBuf, VcsKind)> {
+    let mut dir = start.to_path_buf();
+    loop {
+        if dir.join(".jj").is_dir() {
+            return Some((dir, VcsKind::Jj));
+        }
+        if dir.join(".git").exists() {
+            return Some((dir, VcsKind::Git));
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// The cache directory: `/tmp/vcs-status-daemon-$USER/cache/`
+pub fn cache_dir() -> PathBuf {
+    let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
+    PathBuf::from(format!("/tmp/vcs-status-daemon-{user}/cache"))
+}
+
+/// Encode a path as a flat filename: `/Users/bwm/repos/foo` → `%Users%bwm%repos%foo`
+fn path_to_cache_name(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    canonical
+        .to_string_lossy()
+        .replace('/', "%")
+}
+
+/// Cache file path for a directory (repo root or any queried subdirectory).
+pub fn cache_file_path(dir: &Path) -> PathBuf {
+    cache_dir().join(path_to_cache_name(dir))
 }
 
 pub fn config_path() -> Option<PathBuf> {

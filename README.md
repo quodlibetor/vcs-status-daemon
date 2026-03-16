@@ -41,16 +41,26 @@ cargo install --path .
 
 ### Shell prompt integration
 
-Add to your shell prompt (e.g. in `.zshrc` or `.bashrc`):
+#### Starship (recommended)
 
-```sh
-# Exits silently with no output when not in a jj/git repo
-export PS1='$(vcs-status-daemon) $ '
+Add a `precmd` hook to your `.zshrc` that sets an env var using only shell builtins (no subprocess on the fast path), then have starship display it:
+
+```zsh
+# .zshrc
+_vcs_status_precmd() {
+  local cwd="${PWD:A}"
+  local cache="/tmp/vcs-status-daemon-$USER/cache/${cwd//\//%}"
+  if [[ -f "$cache" ]]; then
+    export VCS_STATUS="$(<"$cache")"
+  else
+    export VCS_STATUS="$(vcs-status-daemon)"
+  fi
+}
+precmd_functions+=(_vcs_status_precmd)
 ```
 
-Or with starship, in `starship.toml`:
-
 ```toml
+# starship.toml
 [git_branch]
 disabled = true
 
@@ -63,9 +73,51 @@ disabled = true
 [git_state]
 disabled = true
 
-[custom.vcs]
-command = "vcs-status-daemon"
-when = true
+[env_var.VCS_STATUS]
+format = "$env_value "
+```
+
+This is the fastest option: the shell reads a small file directly, and starship just prints the variable — no subprocess at all once the cache is warm.
+
+For bash, replace `${PWD:A}` with `$(pwd -P)` and use `PROMPT_COMMAND`:
+
+```bash
+# .bashrc
+_vcs_status_precmd() {
+  local cwd
+  cwd=$(pwd -P)
+  local cache="/tmp/vcs-status-daemon-$USER/cache/${cwd//\//%}"
+  if [[ -f "$cache" ]]; then
+    export VCS_STATUS="$(<"$cache")"
+  else
+    export VCS_STATUS="$(vcs-status-daemon)"
+  fi
+}
+PROMPT_COMMAND="_vcs_status_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+```
+
+#### Plain shell prompt (no starship)
+
+```zsh
+# .zshrc
+vcs_status() {
+  local cwd="${PWD:A}"
+  local cache="/tmp/vcs-status-daemon-$USER/cache/${cwd//\//%}"
+  if [[ -f "$cache" ]]; then
+    printf '%s' "$(<"$cache")"
+  else
+    vcs-status-daemon
+  fi
+}
+PS1='$(vcs_status) $ '
+```
+
+#### Simple (no shell function)
+
+If you don't need the speed, call the binary directly (it uses the same file cache internally):
+
+```sh
+export PS1='$(vcs-status-daemon) $ '
 ```
 
 ### Commands

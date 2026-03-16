@@ -49,7 +49,20 @@ fn extract_status(response: Response) -> Result<String> {
     }
 }
 
+/// Try to read cached status directly from a file (fastest path — no socket, no directory walk).
+/// The daemon hardlinks queried directories to the repo root's cache file.
+fn try_cache_file(repo_path: &Path) -> Option<String> {
+    let cache_path = config::cache_file_path(repo_path);
+    std::fs::read_to_string(cache_path).ok()
+}
+
 pub fn query(repo_path: &Path) -> Result<String> {
+    // Fast path: read directly from cache file (no IPC)
+    if let Some(cached) = try_cache_file(repo_path) {
+        return Ok(cached);
+    }
+
+    // Slow path: socket query (also populates the cache file for next time)
     let socket_path = config::socket_path();
     let request = Request::Query {
         repo_path: repo_path.to_string_lossy().to_string(),

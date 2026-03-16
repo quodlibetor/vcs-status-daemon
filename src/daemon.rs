@@ -24,21 +24,7 @@ struct DaemonState {
     config: Config,
 }
 
-/// Find the repo root and VCS kind. jj wins if both `.jj/` and `.git/` are present.
-fn find_repo_root(start: &Path) -> Option<(PathBuf, VcsKind)> {
-    let mut dir = start.to_path_buf();
-    loop {
-        if dir.join(".jj").is_dir() {
-            return Some((dir, VcsKind::Jj));
-        }
-        if dir.join(".git").exists() {
-            return Some((dir, VcsKind::Git));
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
+use crate::config::find_repo_root;
 
 pub fn init_logging() {
     let file_appender = tracing_appender::rolling::never("/tmp", "vcs-status-daemon.log");
@@ -164,7 +150,8 @@ async fn handle_connection(
                 let resolved = if let Some(entry) = st.dir_to_repo.get(&query_path) {
                     Some(entry.clone())
                 } else if let Some(found) = find_repo_root(&query_path) {
-                    st.dir_to_repo.insert(query_path, found.clone());
+                    st.dir_to_repo
+                        .insert(query_path.clone(), found.clone());
                     Some(found)
                 } else {
                     None
@@ -206,11 +193,12 @@ async fn handle_connection(
                     Ok(status) => {
                         let formatted =
                             format_status(&status, &config.resolved_format(), config.color);
+                        write_cache_file(&repo_path, &formatted);
                         state
                             .lock()
                             .await
                             .cache
-                            .insert(repo_path, formatted.clone());
+                            .insert(repo_path.clone(), formatted.clone());
                         formatted
                     }
                     Err(e) => {
@@ -224,6 +212,12 @@ async fn handle_connection(
                     }
                 }
             };
+
+            // Ensure the queried directory has a hardlink to the repo root's cache file
+            // so the client can read it directly next time without directory walking.
+            if query_path != repo_path {
+                link_cache_file(&repo_path, &query_path);
+            }
 
             send_response(&mut writer, Response::Status { formatted }).await
         }
@@ -249,6 +243,41 @@ async fn send_response(
     json.push('\n');
     writer.write_all(json.as_bytes()).await?;
     Ok(())
+}
+
+/// Write the formatted status to the on-disk cache file for fast client reads.
+///
+/// Because subdirectory entries are hardlinked to the repo root file,
+/// we write in-place (not rename) so all hardlinks see the update via the shared inode.
+fn write_cache_file(repo_path: &Path, formatted: &str) {
+    let file_path = crate::config::cache_file_path(repo_path);
+    if let Some(parent) = file_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&file_path, formatted) {
+        tracing::warn!(path = %file_path.display(), error = %e, "failed to write cache file");
+    }
+}
+
+/// Create a hardlink from a queried subdirectory's cache entry to the repo root's cache file.
+/// Since they share the same inode, future writes to the repo root file update both.
+fn link_cache_file(repo_root: &Path, query_dir: &Path) {
+    let root_file = crate::config::cache_file_path(repo_root);
+    let dir_file = crate::config::cache_file_path(query_dir);
+    if dir_file.exists() {
+        return; // already linked
+    }
+    if let Some(parent) = dir_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::hard_link(&root_file, &dir_file) {
+        tracing::debug!(
+            src = %root_file.display(),
+            dst = %dir_file.display(),
+            error = %e,
+            "failed to hardlink cache file"
+        );
+    }
 }
 
 /// Tracks per-repo: (vcs_kind, working_copy_changed)
@@ -287,6 +316,7 @@ async fn process_pending(
         match result {
             Ok(status) => {
                 let formatted = format_status(&status, &config.resolved_format(), config.color);
+                write_cache_file(&repo_path, &formatted);
                 state.lock().await.cache.insert(repo_path, formatted);
             }
             Err(e) => {
