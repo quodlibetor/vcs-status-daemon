@@ -64,9 +64,22 @@ Or go to the [Releases](https://github.com/quodlibetor/vcs-status-daemon/release
 
 ### Shell prompt integration
 
-#### Starship (recommended)
 
-Add a `precmd` hook to your `.zshrc` that sets an env var using only shell builtins (no subprocess on the fast path), then have starship display it:
+#### Simple (no shell function)
+
+Modern computers run vcs-status-daemon in under 5 ms, so you can just call it in a subshell, add it to the end of your PS1:
+
+```sh
+export PS1='$(vcs-status-daemon) $ '
+```
+
+#### Starship
+
+Starship is much slower at calling subprocesses than it is at using built-in tools, so putting the VCS status in an env var cuts out *tens* of milliseconds.
+
+<details>
+  <summary><strong>zsh</strong> -- define a shell function and add it to your prompt</summary>
+Add a `precmd` hook to your `.zshrc`, then have starship display it:
 
 ```zsh
 # .zshrc
@@ -81,6 +94,28 @@ _vcs_status_precmd() {
 }
 precmd_functions+=(_vcs_status_precmd)
 ```
+</details>
+
+<details>
+  <summary><strong>bash</strong> -- define a function and add it to your prompt</summary>
+
+For bash, use `PROMPT_COMMAND`:
+
+```bash
+# .bashrc
+_vcs_status_precmd() {
+  local cwd
+  cwd=$(pwd -P)
+  local cache="/tmp/vcs-status-daemon-$USER/cache/${cwd//\//%}"
+  if [[ -f "$cache" ]]; then
+    export VCS_STATUS="$(<"$cache")"
+  else
+    export VCS_STATUS="$(vcs-status-daemon)"
+  fi
+}
+PROMPT_COMMAND="_vcs_status_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+```
+</details>
 
 ```toml
 # starship.toml
@@ -96,27 +131,9 @@ disabled = true
 [git_state]
 disabled = true
 
+# This variable is defined by the _vcs_status_precmd defined in the shell rc file above
 [env_var.VCS_STATUS]
 format = "$env_value "
-```
-
-This is the fastest option: the shell reads a small file directly, and starship just prints the variable — no subprocess at all once the cache is warm.
-
-For bash, replace `${PWD:A}` with `$(pwd -P)` and use `PROMPT_COMMAND`:
-
-```bash
-# .bashrc
-_vcs_status_precmd() {
-  local cwd
-  cwd=$(pwd -P)
-  local cache="/tmp/vcs-status-daemon-$USER/cache/${cwd//\//%}"
-  if [[ -f "$cache" ]]; then
-    export VCS_STATUS="$(<"$cache")"
-  else
-    export VCS_STATUS="$(vcs-status-daemon)"
-  fi
-}
-PROMPT_COMMAND="_vcs_status_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 ```
 
 #### Plain shell prompt (no starship)
@@ -133,14 +150,6 @@ vcs_status() {
   fi
 }
 PS1='$(vcs_status) $ '
-```
-
-#### Simple (no shell function)
-
-If you don't need the speed, call the binary directly (it uses the same file cache internally):
-
-```sh
-export PS1='$(vcs-status-daemon) $ '
 ```
 
 ### Commands
