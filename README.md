@@ -31,11 +31,33 @@ Shell prompt calls:   vcs-status-daemon         (client mode, the default)
 
 ## Installation
 
-Requires Rust and a working `jj` and/or `git` CLI installation.
+Requires a working `jj` and/or `git` CLI installation.
 
-```sh
-cargo install --path .
+Install prebuilt binaries via shell script
+
+```shell
+curl --proto '=https' --tlsv1.2 -LsSf 'https://github.com/quodlibetor/vcs-status-daemon/releases/latest/download/vcs-status-daemon-installer.sh' | sh
 ```
+
+Install prebuilt binaries via Homebrew or Linuxbrew:
+
+```shell
+brew install 'quodlibetor/tap/vcs-status-daemon'
+```
+
+Install prebuilt binaries via [mise](https://mise.jdx.dev/)
+
+```shell
+mise use -g 'github:quodlibetor/vcs-status-daemon@latest'
+```
+
+Install via cargo:
+
+```shell
+cargo install --git 'https://github.com/quodlibetor/vcs-status-daemon'
+```
+
+Or go to the [Releases](https://github.com/quodlibetor/vcs-status-daemon/releases) and download an artifact directly.
 
 ## Usage
 
