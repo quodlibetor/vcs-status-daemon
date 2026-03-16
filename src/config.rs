@@ -76,18 +76,26 @@ impl Default for Config {
     }
 }
 
-/// Resolve the daemon socket path.
+/// Resolve the daemon runtime directory.
 ///
-/// Checks `VCS_STATUS_DAEMON_SOCKET_PATH` env var first, then falls back
-/// to `/tmp/vcs-status-daemon-$USER.sock`.
-pub fn socket_path() -> PathBuf {
-    if let Ok(path) = std::env::var("VCS_STATUS_DAEMON_SOCKET_PATH")
+/// Checks `VCS_STATUS_DAEMON_DIR` env var first, then falls back
+/// to `/tmp/vcs-status-daemon-$USER/`.
+///
+/// Layout:
+///   `<dir>/sock`   — Unix domain socket
+///   `<dir>/cache/` — cached status files
+pub fn runtime_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("VCS_STATUS_DAEMON_DIR")
         && !path.is_empty()
     {
         return PathBuf::from(path);
     }
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-    PathBuf::from(format!("/tmp/vcs-status-daemon-{user}.sock"))
+    PathBuf::from(format!("/tmp/vcs-status-daemon-{user}"))
+}
+
+pub fn socket_path() -> PathBuf {
+    runtime_dir().join("sock")
 }
 
 /// Find the repo root and VCS kind. jj wins if both `.jj/` and `.git/` are present.
@@ -106,10 +114,9 @@ pub fn find_repo_root(start: &Path) -> Option<(PathBuf, VcsKind)> {
     }
 }
 
-/// The cache directory: `/tmp/vcs-status-daemon-$USER/cache/`
+/// The cache directory: `<runtime_dir>/cache/`
 pub fn cache_dir() -> PathBuf {
-    let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-    PathBuf::from(format!("/tmp/vcs-status-daemon-{user}/cache"))
+    runtime_dir().join("cache")
 }
 
 /// Encode a path as a flat filename: `/Users/bwm/repos/foo` → `%Users%bwm%repos%foo`

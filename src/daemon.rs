@@ -22,12 +22,14 @@ struct DaemonState {
     dir_to_repo: HashMap<PathBuf, (PathBuf, VcsKind)>,
     last_query: Instant,
     config: Config,
+    cache_dir: PathBuf,
 }
 
 use crate::config::find_repo_root;
 
-pub fn init_logging() {
-    let file_appender = tracing_appender::rolling::never("/tmp", "vcs-status-daemon.log");
+pub fn init_logging(runtime_dir: &Path) {
+    std::fs::create_dir_all(runtime_dir).ok();
+    let file_appender = tracing_appender::rolling::never(runtime_dir, "daemon.log");
 
     let filter =
         EnvFilter::try_from_env("VCS_STATUS_DAEMON_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
@@ -39,7 +41,9 @@ pub fn init_logging() {
         .init();
 }
 
-pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
+pub async fn run_daemon(config: Config, runtime_dir: PathBuf) -> Result<()> {
+    let socket_path = runtime_dir.join("sock");
+    let cache_dir = runtime_dir.join("cache");
     tracing::info!(
         template_name = %config.template_name,
         has_format_override = config.format.is_some(),
@@ -72,6 +76,7 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
         dir_to_repo: HashMap::new(),
         last_query: Instant::now(),
         config: config.clone(),
+        cache_dir: cache_dir.clone(),
     }));
 
     // Spawn refresh task
@@ -95,11 +100,12 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
 
     // Ctrl-C: clear cache files but keep running
     let state_int = state.clone();
+    let cache_dir_int = cache_dir.clone();
     tokio::spawn(async move {
         loop {
             let _ = tokio::signal::ctrl_c().await;
             tracing::info!("received ctrl-c, clearing cache");
-            let _ = std::fs::remove_dir_all(crate::config::cache_dir());
+            let _ = std::fs::remove_dir_all(&cache_dir_int);
             state_int.lock().await.cache.clear();
         }
     });
@@ -107,9 +113,8 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
     // SIGTERM: clean up everything and shut down
     let shutdown_term = shutdown.clone();
     tokio::spawn(async move {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to register SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
         sigterm.recv().await;
         shutdown_term.notify_one();
     });
@@ -133,7 +138,6 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
                 if let Err(e) = std::fs::remove_file(&socket_path) {
                     tracing::warn!(path = %socket_path.display(), error = %e, "failed to remove socket");
                 }
-                let cache_dir = crate::config::cache_dir();
                 if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
                     tracing::warn!(path = %cache_dir.display(), error = %e, "failed to remove cache directory");
                 }
@@ -163,7 +167,7 @@ async fn handle_connection(
                 .unwrap_or_else(|_| PathBuf::from(&repo_path));
 
             // Resolve the repo root and VCS kind from the given path
-            let (repo_path, vcs_kind, cached, config) = {
+            let (repo_path, vcs_kind, cached, config, cd) = {
                 let mut st = state.lock().await;
                 st.last_query = Instant::now();
 
@@ -196,7 +200,8 @@ async fn handle_connection(
 
                 let cached = st.cache.get(&repo_path).cloned();
                 let config = st.config.clone();
-                (repo_path, vcs_kind, cached, config)
+                let cache_dir = st.cache_dir.clone();
+                (repo_path, vcs_kind, cached, config, cache_dir)
             };
 
             let formatted = if let Some(cached) = cached {
@@ -212,7 +217,7 @@ async fn handle_connection(
                     Ok(status) => {
                         let formatted =
                             format_status(&status, &config.resolved_format(), config.color);
-                        write_cache_file(&repo_path, &formatted);
+                        write_cache_file(&cd, &repo_path, &formatted);
                         state
                             .lock()
                             .await
@@ -235,7 +240,7 @@ async fn handle_connection(
             // Ensure the queried directory has a hardlink to the repo root's cache file
             // so the client can read it directly next time without directory walking.
             if query_path != repo_path {
-                link_cache_file(&repo_path, &query_path);
+                link_cache_file(&cd, &repo_path, &query_path);
             }
 
             send_response(&mut writer, Response::Status { formatted }).await
@@ -264,12 +269,19 @@ async fn send_response(
     Ok(())
 }
 
+/// Compute the cache file path for a given directory within a specific cache dir.
+fn cache_file_in(cache_dir: &Path, dir: &Path) -> PathBuf {
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let name = canonical.to_string_lossy().replace('/', "%");
+    cache_dir.join(name)
+}
+
 /// Write the formatted status to the on-disk cache file for fast client reads.
 ///
 /// Because subdirectory entries are hardlinked to the repo root file,
 /// we write in-place (not rename) so all hardlinks see the update via the shared inode.
-fn write_cache_file(repo_path: &Path, formatted: &str) {
-    let file_path = crate::config::cache_file_path(repo_path);
+fn write_cache_file(cache_dir: &Path, repo_path: &Path, formatted: &str) {
+    let file_path = cache_file_in(cache_dir, repo_path);
     if let Some(parent) = file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -280,9 +292,9 @@ fn write_cache_file(repo_path: &Path, formatted: &str) {
 
 /// Create a hardlink from a queried subdirectory's cache entry to the repo root's cache file.
 /// Since they share the same inode, future writes to the repo root file update both.
-fn link_cache_file(repo_root: &Path, query_dir: &Path) {
-    let root_file = crate::config::cache_file_path(repo_root);
-    let dir_file = crate::config::cache_file_path(query_dir);
+fn link_cache_file(cache_dir: &Path, repo_root: &Path, query_dir: &Path) {
+    let root_file = cache_file_in(cache_dir, repo_root);
+    let dir_file = cache_file_in(cache_dir, query_dir);
     if dir_file.exists() {
         return; // already linked
     }
@@ -324,7 +336,10 @@ async fn process_pending(
     let repos: Vec<(PathBuf, VcsKind, bool)> =
         pending.drain().map(|(p, (v, wc))| (p, v, wc)).collect();
     for (repo_path, vcs_kind, needs_snapshot) in repos {
-        let config = state.lock().await.config.clone();
+        let (config, cd) = {
+            let st = state.lock().await;
+            (st.config.clone(), st.cache_dir.clone())
+        };
         let result = match vcs_kind {
             VcsKind::Jj => {
                 let ignore_wc = !needs_snapshot;
@@ -335,7 +350,7 @@ async fn process_pending(
         match result {
             Ok(status) => {
                 let formatted = format_status(&status, &config.resolved_format(), config.color);
-                write_cache_file(&repo_path, &formatted);
+                write_cache_file(&cd, &repo_path, &formatted);
                 state.lock().await.cache.insert(repo_path, formatted);
             }
             Err(e) => {
@@ -476,8 +491,9 @@ mod tests {
         serde_json::from_str(line.trim()).unwrap()
     }
 
-    fn temp_socket_path(suffix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("jj-test-{}-{suffix}.sock", std::process::id()))
+    fn temp_runtime_dir(suffix: &str) -> TempDir {
+        let dir = TempDir::with_prefix(&format!("vcs-test-{suffix}-")).unwrap();
+        dir
     }
 
     /// Wait for filesystem events to arrive, then flush the daemon's refresh task.
@@ -491,14 +507,14 @@ mod tests {
     #[tokio::test]
     async fn test_daemon_serves_status() {
         let dir = create_jj_repo().await;
-        let socket_path = temp_socket_path("serves");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("serves");
+        let socket_path = rt.path().join("sock");
         let config = Config {
             color: false,
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let resp = send_request(
@@ -528,14 +544,14 @@ mod tests {
         let sub = dir.path().join("src").join("nested");
         std::fs::create_dir_all(&sub).unwrap();
 
-        let socket_path = temp_socket_path("subdir");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("subdir");
+        let socket_path = rt.path().join("sock");
         let config = Config {
             color: false,
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Query from a subdirectory — daemon should resolve the repo root
@@ -584,14 +600,14 @@ mod tests {
     async fn test_daemon_not_a_repo() {
         let dir = TempDir::new().unwrap(); // no jj init
 
-        let socket_path = temp_socket_path("norepo");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("norepo");
+        let socket_path = rt.path().join("sock");
         let config = Config {
             color: false,
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let resp = send_request(
@@ -618,14 +634,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_shutdown() {
-        let socket_path = temp_socket_path("shutdown");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("shutdown");
+        let socket_path = rt.path().join("sock");
         let config = Config {
             color: false,
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let resp = send_request(&socket_path, &Request::Shutdown).await;
@@ -639,14 +655,15 @@ mod tests {
     #[tokio::test]
     async fn test_daemon_shutdown_cleans_cache() {
         let dir = create_jj_repo().await;
-        let socket_path = temp_socket_path("shutdown-cache");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("shutdown-cache");
+        let socket_path = rt.path().join("sock");
+        let cache_dir = rt.path().join("cache");
         let config = Config {
             color: false,
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Query to populate the cache file
@@ -660,17 +677,9 @@ mod tests {
         assert!(matches!(resp, Response::Status { .. }));
 
         // Verify cache file was created
-        let cache_dir = crate::config::cache_dir();
         assert!(
             cache_dir.exists(),
             "cache directory should exist after query"
-        );
-
-        let cache_file = crate::config::cache_file_path(dir.path());
-        assert!(
-            cache_file.exists(),
-            "cache file should exist after query: {}",
-            cache_file.display()
         );
 
         // Shutdown
@@ -687,16 +696,17 @@ mod tests {
     }
 
     /// Helper: start the daemon as a subprocess and wait for it to be ready.
-    async fn spawn_daemon_process(socket_path: &std::path::Path) -> tokio::process::Child {
+    async fn spawn_daemon_process(runtime_dir: &std::path::Path) -> tokio::process::Child {
         // Find the binary: test exe is in deps/, the main binary is one dir up
         let test_exe = std::env::current_exe().unwrap();
         let bin_dir = test_exe.parent().unwrap().parent().unwrap();
         let exe = bin_dir.join("vcs-status-daemon");
         assert!(exe.exists(), "binary not found at {}", exe.display());
 
+        let socket_path = runtime_dir.join("sock");
         let child = Command::new(&exe)
-            .args(["daemon", "--socket"])
-            .arg(socket_path)
+            .args(["daemon", "--dir"])
+            .arg(runtime_dir)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -716,35 +726,11 @@ mod tests {
     #[tokio::test]
     async fn test_daemon_sigterm_cleans_cache() {
         let dir = create_jj_repo().await;
-        let socket_path = temp_socket_path("sigterm-cache");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("sigterm-cache");
+        let socket_path = rt.path().join("sock");
+        let cache_dir = rt.path().join("cache");
 
-        // Use a unique USER so this test's cache dir is isolated from parallel tests
-        let test_user = format!("test-sigterm-{}", std::process::id());
-        let cache_dir = PathBuf::from(format!("/tmp/vcs-status-daemon-{test_user}/cache"));
-
-        // Start daemon with isolated USER
-        let test_exe = std::env::current_exe().unwrap();
-        let bin_dir = test_exe.parent().unwrap().parent().unwrap();
-        let exe = bin_dir.join("vcs-status-daemon");
-
-        let mut child = Command::new(&exe)
-            .args(["daemon", "--socket"])
-            .arg(&socket_path)
-            .env("USER", &test_user)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-
-        for _ in 0..30 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            if socket_path.exists() {
-                break;
-            }
-        }
-        assert!(socket_path.exists(), "daemon should create socket");
+        let mut child = spawn_daemon_process(rt.path()).await;
 
         // Query to populate the cache
         let resp = send_request(
@@ -788,12 +774,10 @@ mod tests {
         );
     }
 
-
-
     #[tokio::test]
     async fn test_daemon_stale_socket() {
-        let socket_path = temp_socket_path("stale");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("stale");
+        let socket_path = rt.path().join("sock");
         std::fs::write(&socket_path, "").unwrap();
 
         let config = Config {
@@ -801,7 +785,7 @@ mod tests {
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let dir = create_jj_repo().await;
@@ -821,8 +805,8 @@ mod tests {
     #[tokio::test]
     async fn test_daemon_cache_update() {
         let dir = create_jj_repo().await;
-        let socket_path = temp_socket_path("cache");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("cache");
+        let socket_path = rt.path().join("sock");
         let config = Config {
             debounce_ms: 100,
             color: false,
@@ -832,7 +816,7 @@ mod tests {
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // First query
@@ -915,15 +899,15 @@ mod tests {
     #[tokio::test]
     async fn test_daemon_serves_git_status() {
         let dir = create_git_repo().await;
-        let socket_path = temp_socket_path("git-serves");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("git-serves");
+        let socket_path = rt.path().join("sock");
         let config = Config {
             color: false,
             format: Some("{% if is_git %}GIT {{ branch }} {{ commit_id }}{% endif %}".to_string()),
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let resp = send_request(
@@ -972,8 +956,8 @@ mod tests {
             .await
             .unwrap();
 
-        let socket_path = temp_socket_path("multi");
-        let _ = std::fs::remove_file(&socket_path);
+        let rt = temp_runtime_dir("multi");
+        let socket_path = rt.path().join("sock");
         let config = Config {
             color: false,
             debounce_ms: 100,
@@ -981,7 +965,7 @@ mod tests {
             ..Default::default()
         };
 
-        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        let daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let req_a = Request::Query {

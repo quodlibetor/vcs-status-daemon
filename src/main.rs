@@ -26,9 +26,9 @@ struct Cli {
 enum Commands {
     /// Run the background daemon
     Daemon {
-        /// Unix socket path (overrides env var)
+        /// Runtime directory (contains socket, cache, and log files)
         #[arg(long)]
-        socket: Option<PathBuf>,
+        dir: Option<PathBuf>,
     },
     /// Query the daemon for status (default)
     Query {
@@ -153,11 +153,11 @@ fn run_clap() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Daemon { socket }) => {
-            daemon::init_logging();
+        Some(Commands::Daemon { dir }) => {
+            let runtime_dir = dir.unwrap_or_else(config::runtime_dir);
+            daemon::init_logging(&runtime_dir);
             let config = config::load_config()?;
-            let socket_path = socket.unwrap_or_else(config::socket_path);
-            build_runtime().block_on(daemon::run_daemon(config, socket_path))?;
+            build_runtime().block_on(daemon::run_daemon(config, runtime_dir))?;
         }
         Some(Commands::Shutdown) => {
             client::shutdown()?;

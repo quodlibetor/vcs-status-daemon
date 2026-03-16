@@ -28,8 +28,8 @@ fn start_daemon(socket_path: &Path) -> Result<()> {
     let exe = std::env::current_exe().context("failed to get current exe")?;
 
     let mut cmd = std::process::Command::new(exe);
-    cmd.args(["daemon", "--socket"]);
-    cmd.arg(socket_path);
+    cmd.args(["daemon", "--dir"]);
+    cmd.arg(socket_path.parent().unwrap_or(socket_path));
 
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -120,18 +120,17 @@ mod tests {
     #[tokio::test]
     async fn test_client_connects_to_running_daemon() {
         let dir = create_jj_repo().await;
-        let sock = std::env::temp_dir().join(format!("jj-client-test-{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&sock);
+        let rt = TempDir::with_prefix("vcs-test-client-").unwrap();
 
-        // Point both daemon and client at the same test socket
-        unsafe { std::env::set_var("VCS_STATUS_DAEMON_SOCKET_PATH", &sock) };
+        // Point both daemon and client at the same runtime directory
+        unsafe { std::env::set_var("VCS_STATUS_DAEMON_DIR", rt.path()) };
 
         let config = Config {
             color: false,
             ..Default::default()
         };
 
-        let _daemon = tokio::spawn(run_daemon(config, sock.clone()));
+        let _daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf()));
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // Client calls are synchronous — run on a blocking thread so the
@@ -145,6 +144,6 @@ mod tests {
         tokio::task::spawn_blocking(|| shutdown().ok())
             .await
             .unwrap();
-        unsafe { std::env::remove_var("VCS_STATUS_DAEMON_SOCKET_PATH") };
+        unsafe { std::env::remove_var("VCS_STATUS_DAEMON_DIR") };
     }
 }

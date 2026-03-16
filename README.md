@@ -173,14 +173,19 @@ vcs-status-daemon shutdown
 
 The client sends its current directory to the daemon, which walks up the directory tree to find a repo root (`.jj/` or `.git/`). The mapping from directory to repo root is cached. When run outside a recognized repository, the client exits silently with exit code 0, making it safe for unconditional prompt use.
 
-### Socket path
+### Runtime directory
 
-Both client and daemon resolve the Unix socket path using:
+Both client and daemon resolve paths from a shared runtime directory:
 
-1. `VCS_STATUS_DAEMON_SOCKET_PATH` environment variable (if set)
-2. Default: `/tmp/vcs-status-daemon-$USER.sock`
+1. `VCS_STATUS_DAEMON_DIR` environment variable (if set)
+2. Default: `/tmp/vcs-status-daemon-$USER/`
 
-The daemon also accepts a `--socket` CLI flag, which takes priority over the environment variable. When the client auto-starts the daemon, it always passes its resolved socket path via `--socket` to ensure both sides agree.
+The directory contains:
+- `sock` — Unix domain socket
+- `cache/` — cached status files
+- `daemon.log` — log output
+
+The daemon also accepts a `--dir` CLI flag, which takes priority over the environment variable. When the client auto-starts the daemon, it always passes its resolved directory via `--dir` to ensure both sides agree.
 
 ## Configuration
 
