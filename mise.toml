@@ -1,6 +1,7 @@
 [tools]
 "cargo:cargo-nextest" = "latest"
 cargo-dist = "latest"
+hyperfine = "latest"
 
 [tasks.test]
 description = "Run tests with cargo nextest"

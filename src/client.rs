@@ -1,25 +1,26 @@
 use anyhow::{Context, Result};
+use std::io::{BufRead, Write};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::time::{Duration, timeout};
+use std::time::Duration;
 
 use crate::config;
 use crate::protocol::{Request, Response};
 
-async fn send_request(socket_path: &Path, request: &Request) -> Result<Response> {
-    let stream = UnixStream::connect(socket_path)
-        .await
-        .context("failed to connect to daemon")?;
-    let (reader, mut writer) = stream.into_split();
-
+fn send_request(socket_path: &Path, request: &Request) -> Result<Response> {
+    let stream = UnixStream::connect(socket_path).context("failed to connect to daemon")?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .ok();
+    let mut writer = std::io::BufWriter::new(&stream);
     let mut json = serde_json::to_string(request)?;
     json.push('\n');
-    writer.write_all(json.as_bytes()).await?;
+    writer.write_all(json.as_bytes())?;
+    writer.flush()?;
 
-    let mut reader = BufReader::new(reader);
+    let mut reader = std::io::BufReader::new(&stream);
     let mut line = String::new();
-    reader.read_line(&mut line).await?;
+    reader.read_line(&mut line)?;
 
     let response: Response = serde_json::from_str(line.trim())?;
     Ok(response)
@@ -40,19 +41,23 @@ fn start_daemon(socket_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn query(repo_path: &Path) -> Result<String> {
+fn extract_status(response: Response) -> Result<String> {
+    match response {
+        Response::Status { formatted } => Ok(formatted),
+        Response::Error { message } => anyhow::bail!("{message}"),
+        Response::Ok => Ok(String::new()),
+    }
+}
+
+pub fn query(repo_path: &Path) -> Result<String> {
     let socket_path = config::socket_path();
     let request = Request::Query {
         repo_path: repo_path.to_string_lossy().to_string(),
     };
 
     // Try connecting directly first
-    if let Ok(response) = send_request(&socket_path, &request).await {
-        return match response {
-            Response::Status { formatted } => Ok(formatted),
-            Response::Error { message } => anyhow::bail!("{message}"),
-            Response::Ok => Ok(String::new()),
-        };
+    if let Ok(response) = send_request(&socket_path, &request) {
+        return extract_status(response);
     }
 
     // Daemon not running, start it
@@ -60,28 +65,19 @@ pub async fn query(repo_path: &Path) -> Result<String> {
 
     // Retry with backoff
     for i in 0..10 {
-        tokio::time::sleep(Duration::from_millis(100 * (i + 1))).await;
-        if let Ok(response) = send_request(&socket_path, &request).await {
-            return match response {
-                Response::Status { formatted } => Ok(formatted),
-                Response::Error { message } => anyhow::bail!("{message}"),
-                Response::Ok => Ok(String::new()),
-            };
+        std::thread::sleep(Duration::from_millis(100 * (i + 1)));
+        if let Ok(response) = send_request(&socket_path, &request) {
+            return extract_status(response);
         }
     }
 
     anyhow::bail!("failed to connect to daemon after starting it")
 }
 
-pub async fn shutdown() -> Result<()> {
+pub fn shutdown() -> Result<()> {
     let socket_path = config::socket_path();
-    let response = timeout(
-        Duration::from_secs(5),
-        send_request(&socket_path, &Request::Shutdown),
-    )
-    .await
-    .context("timeout connecting to daemon")?
-    .context("failed to send shutdown")?;
+    let response =
+        send_request(&socket_path, &Request::Shutdown).context("failed to send shutdown")?;
 
     match response {
         Response::Ok => Ok(()),
@@ -113,7 +109,8 @@ mod tests {
     #[tokio::test]
     async fn test_client_connects_to_running_daemon() {
         let dir = create_jj_repo().await;
-        let sock = std::env::temp_dir().join(format!("jj-client-test-{}.sock", std::process::id()));
+        let sock =
+            std::env::temp_dir().join(format!("jj-client-test-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&sock);
 
         // Point both daemon and client at the same test socket
@@ -125,12 +122,19 @@ mod tests {
         };
 
         let _daemon = tokio::spawn(run_daemon(config, sock.clone()));
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        let result = query(dir.path()).await.unwrap();
+        // Client calls are synchronous — run on a blocking thread so the
+        // tokio executor can still drive the daemon task.
+        let dir_path = dir.path().to_path_buf();
+        let result = tokio::task::spawn_blocking(move || query(&dir_path).unwrap())
+            .await
+            .unwrap();
         assert!(!result.is_empty());
 
-        shutdown().await.ok();
+        tokio::task::spawn_blocking(|| shutdown().ok())
+            .await
+            .unwrap();
         unsafe { std::env::remove_var("VCS_STATUS_DAEMON_SOCKET_PATH") };
     }
 }

@@ -75,7 +75,7 @@ fn try_fast_args() -> Option<Option<PathBuf>> {
     }
 }
 
-async fn run_query(path: Option<PathBuf>) -> anyhow::Result<()> {
+fn run_query(path: Option<PathBuf>) -> anyhow::Result<()> {
     let path = match path {
         Some(p) => p,
         None => match std::env::current_dir() {
@@ -84,22 +84,28 @@ async fn run_query(path: Option<PathBuf>) -> anyhow::Result<()> {
         },
     };
 
-    let status = client::query(&path).await?;
+    let status = client::query(&path)?;
     if !status.is_empty() {
         print!("{status}");
     }
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
-    // Fast path: skip clap for the common no-subcommand client case
+fn main() -> anyhow::Result<()> {
+    // Fast path: skip clap and tokio for the common no-subcommand client case
     if let Some(repo) = try_fast_args() {
-        return run_query(repo).await;
+        return run_query(repo);
     }
 
-    // Slow path: full clap parsing for daemon/shutdown/query/help
-    run_clap().await
+    // Slow path: full clap parsing, tokio runtime only started for daemon
+    run_clap()
+}
+
+fn build_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime")
 }
 
 fn run_config(action: ConfigAction) -> anyhow::Result<()> {
@@ -143,7 +149,7 @@ fn run_config(action: ConfigAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_clap() -> anyhow::Result<()> {
+fn run_clap() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -151,19 +157,19 @@ async fn run_clap() -> anyhow::Result<()> {
             daemon::init_logging();
             let config = config::load_config()?;
             let socket_path = socket.unwrap_or_else(config::socket_path);
-            daemon::run_daemon(config, socket_path).await?;
+            build_runtime().block_on(daemon::run_daemon(config, socket_path))?;
         }
         Some(Commands::Shutdown) => {
-            client::shutdown().await?;
+            client::shutdown()?;
         }
         Some(Commands::Config { action }) => {
             run_config(action)?;
         }
         Some(Commands::Query { repo }) => {
-            run_query(repo.or(cli.repo)).await?;
+            run_query(repo.or(cli.repo))?;
         }
         None => {
-            run_query(cli.repo).await?;
+            run_query(cli.repo)?;
         }
     }
 
