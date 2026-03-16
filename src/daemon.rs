@@ -233,10 +233,7 @@ fn collect_change(wc_changed: &mut HashMap<PathBuf, bool>, event: WatchEvent) {
     }
 }
 
-async fn process_pending(
-    state: &Arc<Mutex<DaemonState>>,
-    wc_changed: &mut HashMap<PathBuf, bool>,
-) {
+async fn process_pending(state: &Arc<Mutex<DaemonState>>, wc_changed: &mut HashMap<PathBuf, bool>) {
     let repos: Vec<(PathBuf, bool)> = wc_changed.drain().collect();
     for (repo_path, needs_snapshot) in repos {
         let config = state.lock().await.config.clone();
