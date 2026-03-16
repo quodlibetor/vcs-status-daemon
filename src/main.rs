@@ -38,6 +38,21 @@ enum Commands {
     },
     /// Shut down the daemon
     Shutdown,
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Write a default config file with explanatory comments
+    Init,
+    /// Open the config file in $EDITOR
+    Edit,
+    /// Print the config file path
+    Path,
 }
 
 /// Fast-path arg parsing for the common client case.
@@ -51,7 +66,7 @@ fn try_fast_args() -> Option<Option<PathBuf>> {
     let s = first.to_str()?;
     match s {
         // Subcommands and help flags → fall through to clap
-        "daemon" | "shutdown" | "query" | "-h" | "--help" | "--version" => None,
+        "daemon" | "shutdown" | "query" | "config" | "-h" | "--help" | "--version" => None,
         "--repo" => {
             let path = args.next().map(PathBuf::from);
             Some(path)
@@ -87,17 +102,64 @@ async fn main() -> anyhow::Result<()> {
     run_clap().await
 }
 
+fn run_config(action: ConfigAction) -> anyhow::Result<()> {
+    match action {
+        ConfigAction::Init => {
+            let path = config::config_init_path()?;
+            if path.exists() {
+                anyhow::bail!("config file already exists: {}", path.display());
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, config::DEFAULT_CONFIG_TOML)?;
+            eprintln!("Wrote default config to {}", path.display());
+        }
+        ConfigAction::Edit => {
+            let path = config::config_path()
+                .filter(|p| p.exists())
+                .or_else(|| config::config_init_path().ok())
+                .ok_or_else(|| anyhow::anyhow!("could not determine config path"))?;
+            if !path.exists() {
+                // Create it so the editor has something to open
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, config::DEFAULT_CONFIG_TOML)?;
+            }
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+            let status = std::process::Command::new(&editor)
+                .arg(&path)
+                .status()?;
+            if !status.success() {
+                anyhow::bail!("{editor} exited with {status}");
+            }
+        }
+        ConfigAction::Path => {
+            let path = config::config_path()
+                .or_else(|| config::config_init_path().ok())
+                .ok_or_else(|| anyhow::anyhow!("could not determine config path"))?;
+            println!("{}", path.display());
+        }
+    }
+    Ok(())
+}
+
 async fn run_clap() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Some(Commands::Daemon { socket }) => {
+            daemon::init_logging();
             let config = config::load_config()?;
             let socket_path = socket.unwrap_or_else(config::socket_path);
             daemon::run_daemon(config, socket_path).await?;
         }
         Some(Commands::Shutdown) => {
             client::shutdown().await?;
+        }
+        Some(Commands::Config { action }) => {
+            run_config(action)?;
         }
         Some(Commands::Query { repo }) => {
             run_query(repo.or(cli.repo)).await?;

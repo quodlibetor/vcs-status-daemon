@@ -53,6 +53,18 @@ export PS1='$(jj-status-daemon) $ '
 Or with starship, in `starship.toml`:
 
 ```toml
+[git_branch]
+disabled = true
+
+[git_commit]
+disabled = true
+
+[git_status]
+disabled = true
+
+[git_state]
+disabled = true
+
 [custom.jj]
 command = "jj-status-daemon"
 when = true
@@ -105,8 +117,15 @@ bookmark_search_depth = 10
 # Enable ANSI color output (default: true)
 color = true
 
-# Status format template (Tera syntax, see below)
+# Built-in template to use: "ascii" (default) or "nerdfont"
+template_name = "ascii"
+
+# Explicit format template (Tera syntax, overrides template_name if set)
 # format = "..."
+
+# User-defined named templates (selected via template_name)
+# [templates]
+# my_template = "{{ change_id }} {{ description }}"
 ```
 
 ## Format template
@@ -219,9 +238,17 @@ These resolve to ANSI escape sequences when `color = true` and to empty strings 
 | `BRIGHT_WHITE` | `\e[97m` | Bright white |
 
 
-### Default template
+### Built-in templates
 
-The built-in default template handles both jj and git repos:
+Two templates are included. Select one with `template_name` in your config:
+
+```toml
+template_name = "nerdfont"
+```
+
+#### `ascii` (default)
+
+Works in any terminal. Example output:
 
 - **jj**: `xlvlt main [3 +10-5]` or `xlvlt (EMPTY)`
 - **git**: `main abc1234 [3 +10-5]` or `main abc1234 (EMPTY)`
@@ -239,20 +266,55 @@ The built-in default template handles both jj and git repos:
 {%- if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}
 ```
 
-In the TOML config file, use multi-line literal strings (`'''`) for readability. Use Tera's `{%-` whitespace trimming to prevent newlines from appearing in the output:
+#### `nerdfont`
+
+Requires a [Nerd Font](https://www.nerdfonts.com/). Uses 󱗆 for jj repos and  for git repos. Example output:
+
+- **jj**: `󱗆 xlvlt  main [3 +10 -5]` or `󱗆 xlvlt ∅`
+- **git**: ` main abc1234 [3 +10 -5]` or ` main abc1234 ∅`
+
+```tera
+{% if is_jj %}{{ MAGENTA }}󱗆{{ RST }} {{ change_id }}
+{%- for b in bookmarks %} {{ BLUE }} {{ b.display }}{{ RST }}{% endfor %}
+{%- elif is_git %}{{ BLUE }}{{ RST }} {{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}
+{%- endif %}
+{%- if total_files_changed > 0 %} {{ BLUE }}[{{ RST }}{{ BRIGHT_BLUE }}{{ total_files_changed }}{{ RST }} {{ BRIGHT_GREEN }}+{{ total_lines_added }}{{ RST }} {{ BRIGHT_RED }}-{{ total_lines_removed }}{{ RST }}{{ BLUE }}]{{ RST }}{% endif %}
+{%- if conflict %} {{ BRIGHT_RED }}{{ RST }}{% endif %}
+{%- if divergent %} {{ BRIGHT_RED }}{{ RST }}{% endif %}
+{%- if hidden %} {{ BRIGHT_YELLOW }}󰘌{{ RST }}{% endif %}
+{%- if immutable %} {{ YELLOW }}{{ RST }}{% endif %}
+{%- if empty %} {{ DIM }}∅{{ RST }}{% endif %}
+```
+
+### User-defined templates
+
+You can define your own named templates in the config and select them with `template_name`:
+
+```toml
+template_name = "minimal"
+
+[templates]
+minimal = "{{ commit_id }} {{ description }}"
+```
+
+User templates take priority over built-in ones — you can override `ascii` or `nerdfont` with your own version.
+
+### Inline format override
+
+The `format` field directly sets the template string, overriding `template_name`:
+
+```toml
+format = "{{ change_id }} {{ branch }}"
+```
+
+In TOML, use multi-line literal strings (`'''`) for readability. Use Tera's `{%-` whitespace trimming to prevent newlines from appearing in the output:
 
 ```toml
 format = '''
 {% if is_jj %}{{ change_id }}
-{%- for b in bookmarks %} {{ BLUE }}{{ b.display }}{{ RST }}{% endfor %}
-{%- elif is_git %}{{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}
-{%- endif %}
-{%- if total_files_changed > 0 %} {{ BLUE }}[{{ RST }}{{ BRIGHT_BLUE }}{{ total_files_changed }}{{ RST }} {{ BRIGHT_GREEN }}+{{ total_lines_added }}{{ RST }}{{ BRIGHT_RED }}-{{ total_lines_removed }}{{ RST }}{{ BLUE }}]{{ RST }}{% endif %}
-{%- if conflict %} {{ BRIGHT_RED }}CONFLICT{{ RST }}{% endif %}
-{%- if divergent %} {{ BRIGHT_RED }}DIVERGENT{{ RST }}{% endif %}
-{%- if hidden %} {{ BRIGHT_YELLOW }}HIDDEN{{ RST }}{% endif %}
-{%- if immutable %} {{ YELLOW }}IMMUTABLE{{ RST }}{% endif %}
-{%- if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}'''
+{%- for b in bookmarks %} {{ b.display }}{% endfor %}
+{%- elif is_git %}{{ branch }} {{ commit_id }}
+{%- endif %}'''
 ```
 
 ### Custom template examples

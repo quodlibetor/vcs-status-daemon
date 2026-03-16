@@ -324,11 +324,11 @@ pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String
     }
 }
 
-/// Default Tera template for status formatting.
+/// Built-in "ascii" template — works in any terminal.
 ///
-/// For jj repos: `xlvlt main [3 +10-5]`
-/// For git repos: `main abc1234 [3 +10-5]`
-pub const DEFAULT_FORMAT: &str = "\
+/// jj: `xlvlt main [3 +10-5]`
+/// git: `main abc1234 [3 +10-5]`
+pub const ASCII_FORMAT: &str = "\
 {% if is_jj %}{{ change_id }}\
 {% for b in bookmarks %} {{ BLUE }}{{ b.display }}{{ RST }}{% endfor %}\
 {% elif is_git %}{{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}\
@@ -343,6 +343,35 @@ pub const DEFAULT_FORMAT: &str = "\
 {% if hidden %} {{ BRIGHT_YELLOW }}HIDDEN{{ RST }}{% endif %}\
 {% if immutable %} {{ YELLOW }}IMMUTABLE{{ RST }}{% endif %}\
 {% if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}";
+
+/// Built-in "nerdfont" template — requires a Nerd Font.
+///
+/// jj: `󱗆 xlvlt  main [3 +10 -5]`
+/// git: ` main abc1234 [3 +10 -5]`
+pub const NERDFONT_FORMAT: &str = "\
+{% if is_jj %}{{ MAGENTA }}󱗆{{ RST }} {{ change_id }}\
+{% for b in bookmarks %} {{ BLUE }} {{ b.display }}{{ RST }}{% endfor %}\
+{% elif is_git %}{{ BLUE }}{{ RST }} {{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}\
+{% endif %}\
+{% if total_files_changed > 0 %} {{ BLUE }}[{{ RST }}\
+{{ BRIGHT_BLUE }}{{ total_files_changed }}{{ RST }} \
+{{ BRIGHT_GREEN }}+{{ total_lines_added }}{{ RST }} \
+{{ BRIGHT_RED }}-{{ total_lines_removed }}{{ RST }}\
+{{ BLUE }}]{{ RST }}{% endif %}\
+{% if conflict %} {{ BRIGHT_RED }}{{ RST }}{% endif %}\
+{% if divergent %} {{ BRIGHT_RED }}{{ RST }}{% endif %}\
+{% if hidden %} {{ BRIGHT_YELLOW }}󰘌{{ RST }}{% endif %}\
+{% if immutable %} {{ YELLOW }}{{ RST }}{% endif %}\
+{% if empty %} {{ DIM }}∅{{ RST }}{% endif %}";
+
+/// Look up a built-in template by name.
+pub fn builtin_template(name: &str) -> Option<&'static str> {
+    match name {
+        "ascii" => Some(ASCII_FORMAT),
+        "nerdfont" => Some(NERDFONT_FORMAT),
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -480,7 +509,7 @@ mod tests {
             total_lines_removed: 5,
             ..Default::default()
         };
-        let formatted = format_status(&status, DEFAULT_FORMAT, false);
+        let formatted = format_status(&status, ASCII_FORMAT, false);
         assert_eq!(formatted, "mrtu main [3 +10-5]");
     }
 
@@ -493,7 +522,7 @@ mod tests {
             empty: true,
             ..Default::default()
         };
-        let formatted = format_status(&status, DEFAULT_FORMAT, false);
+        let formatted = format_status(&status, ASCII_FORMAT, false);
         assert_eq!(formatted, "mrtu (EMPTY)");
     }
 
@@ -508,7 +537,7 @@ mod tests {
             total_lines_removed: 5,
             ..Default::default()
         };
-        let formatted = format_status(&status, DEFAULT_FORMAT, false);
+        let formatted = format_status(&status, ASCII_FORMAT, false);
         assert_eq!(formatted, "main abc1234 [3 +10-5]");
     }
 
@@ -521,7 +550,7 @@ mod tests {
             empty: true,
             ..Default::default()
         };
-        let formatted = format_status(&status, DEFAULT_FORMAT, false);
+        let formatted = format_status(&status, ASCII_FORMAT, false);
         assert_eq!(formatted, "main abc1234 (EMPTY)");
     }
 
@@ -546,7 +575,7 @@ mod tests {
     #[test]
     fn test_format_toml_multiline_matches_default() {
         // This is the multi-line TOML format from the README. It must produce
-        // identical output to DEFAULT_FORMAT for every combination of fields.
+        // identical output to ASCII_FORMAT for every combination of fields.
         let toml_str = r#"
 format = '''
 {% if is_jj %}{{ change_id }}
@@ -634,11 +663,11 @@ format = '''
         ];
 
         for (i, status) in cases.iter().enumerate() {
-            let from_default = format_status(status, DEFAULT_FORMAT, false);
-            let from_toml = format_status(status, &config.format, false);
+            let from_default = format_status(status, ASCII_FORMAT, false);
+            let from_toml = format_status(status, &config.resolved_format(), false);
             assert_eq!(
                 from_default, from_toml,
-                "case {i}: DEFAULT_FORMAT and TOML multi-line produced different output\n  default: {from_default:?}\n  toml:    {from_toml:?}"
+                "case {i}: ASCII_FORMAT and TOML multi-line produced different output\n  default: {from_default:?}\n  toml:    {from_toml:?}"
             );
         }
     }
@@ -651,7 +680,71 @@ format = '''
             conflict: true,
             ..Default::default()
         };
-        let formatted = format_status(&status, DEFAULT_FORMAT, false);
+        let formatted = format_status(&status, ASCII_FORMAT, false);
         assert!(formatted.contains("CONFLICT"));
+    }
+
+    #[test]
+    fn test_nerdfont_jj() {
+        let status = RepoStatus {
+            is_jj: true,
+            change_id: "mrtu".to_string(),
+            bookmarks: vec![Bookmark {
+                name: "main".into(),
+                distance: 0,
+                display: "main".into(),
+            }],
+            total_files_changed: 3,
+            total_lines_added: 10,
+            total_lines_removed: 5,
+            ..Default::default()
+        };
+        let formatted = format_status(&status, NERDFONT_FORMAT, false);
+        assert!(formatted.contains("󱗆"), "expected jj icon: {formatted:?}");
+        assert!(formatted.contains("mrtu"), "expected change_id: {formatted:?}");
+        assert!(
+            formatted.contains(" main"),
+            "expected bookmark icon: {formatted:?}"
+        );
+        assert!(formatted.contains("+10"), "expected additions: {formatted:?}");
+    }
+
+    #[test]
+    fn test_nerdfont_git() {
+        let status = RepoStatus {
+            is_git: true,
+            branch: "main".to_string(),
+            commit_id: "abc1234".to_string(),
+            total_files_changed: 2,
+            total_lines_added: 7,
+            total_lines_removed: 3,
+            ..Default::default()
+        };
+        let formatted = format_status(&status, NERDFONT_FORMAT, false);
+        assert!(formatted.contains(""), "expected git icon: {formatted:?}");
+        assert!(formatted.contains("main"), "expected branch: {formatted:?}");
+        assert!(
+            formatted.contains("abc1234"),
+            "expected commit_id: {formatted:?}"
+        );
+    }
+
+    #[test]
+    fn test_nerdfont_empty() {
+        let status = RepoStatus {
+            is_jj: true,
+            change_id: "mrtu".to_string(),
+            empty: true,
+            ..Default::default()
+        };
+        let formatted = format_status(&status, NERDFONT_FORMAT, false);
+        assert!(
+            formatted.contains("∅"),
+            "expected empty symbol: {formatted:?}"
+        );
+        assert!(
+            !formatted.contains("EMPTY"),
+            "nerdfont should use ∅ not EMPTY: {formatted:?}"
+        );
     }
 }

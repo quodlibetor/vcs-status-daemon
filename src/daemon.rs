@@ -7,6 +7,8 @@ use tokio::net::UnixListener;
 use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::time::{Duration, Instant};
 
+use tracing_subscriber::EnvFilter;
+
 use crate::config::Config;
 use crate::git::query_git_status;
 use crate::jj::{format_status, query_jj_status};
@@ -38,10 +40,31 @@ fn find_repo_root(start: &Path) -> Option<(PathBuf, VcsKind)> {
     }
 }
 
+pub fn init_logging() {
+    let file_appender = tracing_appender::rolling::never("/tmp", "jj-status-daemon.log");
+
+    let filter = EnvFilter::try_from_env("JJ_STATUS_DAEMON_LOG")
+        .unwrap_or_else(|_| EnvFilter::new("warn"));
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(file_appender)
+        .with_ansi(false)
+        .init();
+}
+
 pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
+
+    tracing::info!(
+        template_name = %config.template_name,
+        has_format_override = config.format.is_some(),
+        "starting daemon"
+    );
+
     // Clean up stale socket
     if socket_path.exists() {
         if tokio::net::UnixStream::connect(&socket_path).await.is_err() {
+            tracing::debug!(path = %socket_path.display(), "removing stale socket");
             std::fs::remove_file(&socket_path)?;
         } else {
             anyhow::bail!("daemon already running (socket is active)");
@@ -53,7 +76,7 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
     }
 
     let listener = UnixListener::bind(&socket_path)?;
-    eprintln!("daemon listening on {}", socket_path.display());
+    tracing::info!(path = %socket_path.display(), "daemon listening");
 
     let (watch_tx, watch_rx) = mpsc::unbounded_channel();
     let shutdown = Arc::new(Notify::new());
@@ -78,7 +101,7 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
             tokio::time::sleep(Duration::from_secs(60)).await;
             let last = state_idle.lock().await.last_query;
             if last.elapsed() > Duration::from_secs(idle_timeout_secs) {
-                eprintln!("idle timeout, shutting down");
+                tracing::info!("idle timeout, shutting down");
                 shutdown_idle.notify_one();
                 return;
             }
@@ -102,12 +125,12 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
 
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(stream, state, watch_tx, shutdown_conn).await {
-                        eprintln!("connection error: {e}");
+                        tracing::warn!(error = %e, "connection error");
                     }
                 });
             }
             _ = shutdown.notified() => {
-                eprintln!("daemon shutting down");
+                tracing::info!("daemon shutting down");
                 let _ = std::fs::remove_file(&socket_path);
                 return Ok(());
             }
@@ -149,6 +172,7 @@ async fn handle_connection(
                 };
 
                 let Some((repo_path, vcs_kind)) = resolved else {
+                    tracing::debug!("no repo found");
                     drop(st);
                     return send_response(
                         &mut writer,
@@ -171,15 +195,17 @@ async fn handle_connection(
             };
 
             let formatted = if let Some(cached) = cached {
+                tracing::debug!(repo = %repo_path.display(), "cache hit");
                 cached
             } else {
+                tracing::debug!(repo = %repo_path.display(), vcs = ?vcs_kind, "cache miss, querying");
                 let result = match vcs_kind {
                     VcsKind::Jj => query_jj_status(&repo_path, &config, false).await,
                     VcsKind::Git => query_git_status(&repo_path, &config).await,
                 };
                 match result {
                     Ok(status) => {
-                        let formatted = format_status(&status, &config.format, config.color);
+                        let formatted = format_status(&status, &config.resolved_format(), config.color);
                         state
                             .lock()
                             .await
@@ -267,11 +293,11 @@ async fn process_pending(
         };
         match result {
             Ok(status) => {
-                let formatted = format_status(&status, &config.format, config.color);
+                let formatted = format_status(&status, &config.resolved_format(), config.color);
                 state.lock().await.cache.insert(repo_path, formatted);
             }
             Err(e) => {
-                eprintln!("refresh error for {}: {e}", repo_path.display());
+                tracing::error!(repo = %repo_path.display(), error = %e, "refresh failed");
             }
         }
     }
@@ -604,7 +630,7 @@ mod tests {
         let config = Config {
             debounce_ms: 100,
             color: false,
-            format: "{{ change_id }} {{ description }}{% if empty %} EMPTY{% endif %}".to_string(),
+            format: Some("{{ change_id }} {{ description }}{% if empty %} EMPTY{% endif %}".to_string()),
             ..Default::default()
         };
 
@@ -690,7 +716,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
         let config = Config {
             color: false,
-            format: "{% if is_git %}GIT {{ branch }} {{ commit_id }}{% endif %}".to_string(),
+            format: Some("{% if is_git %}GIT {{ branch }} {{ commit_id }}{% endif %}".to_string()),
             ..Default::default()
         };
 
@@ -748,7 +774,7 @@ mod tests {
         let config = Config {
             color: false,
             debounce_ms: 100,
-            format: "{{ change_id }} {{ description }}{% for b in bookmarks %} {{ b.name }}{% endfor %}{% if empty %} EMPTY{% endif %}".to_string(),
+            format: Some("{{ change_id }} {{ description }}{% for b in bookmarks %} {{ b.name }}{% endfor %}{% if empty %} EMPTY{% endif %}".to_string()),
             ..Default::default()
         };
 
