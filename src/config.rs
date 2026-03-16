@@ -115,9 +115,7 @@ pub fn cache_dir() -> PathBuf {
 /// Encode a path as a flat filename: `/Users/bwm/repos/foo` → `%Users%bwm%repos%foo`
 fn path_to_cache_name(path: &Path) -> String {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    canonical
-        .to_string_lossy()
-        .replace('/', "%")
+    canonical.to_string_lossy().replace('/', "%")
 }
 
 /// Cache file path for a directory (repo root or any queried subdirectory).

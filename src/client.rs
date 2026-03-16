@@ -9,9 +9,7 @@ use crate::protocol::{Request, Response};
 
 fn send_request(socket_path: &Path, request: &Request) -> Result<Response> {
     let stream = UnixStream::connect(socket_path).context("failed to connect to daemon")?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     let mut writer = std::io::BufWriter::new(&stream);
     let mut json = serde_json::to_string(request)?;
     json.push('\n');
@@ -122,8 +120,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_connects_to_running_daemon() {
         let dir = create_jj_repo().await;
-        let sock =
-            std::env::temp_dir().join(format!("jj-client-test-{}.sock", std::process::id()));
+        let sock = std::env::temp_dir().join(format!("jj-client-test-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&sock);
 
         // Point both daemon and client at the same test socket

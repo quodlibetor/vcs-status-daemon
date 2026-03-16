@@ -150,8 +150,7 @@ async fn handle_connection(
                 let resolved = if let Some(entry) = st.dir_to_repo.get(&query_path) {
                     Some(entry.clone())
                 } else if let Some(found) = find_repo_root(&query_path) {
-                    st.dir_to_repo
-                        .insert(query_path.clone(), found.clone());
+                    st.dir_to_repo.insert(query_path.clone(), found.clone());
                     Some(found)
                 } else {
                     None
