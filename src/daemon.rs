@@ -93,11 +93,25 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
         }
     });
 
-    // Signal handling for cleanup
-    let shutdown_sig = shutdown.clone();
+    // Ctrl-C: clear cache files but keep running
+    let state_int = state.clone();
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        shutdown_sig.notify_one();
+        loop {
+            let _ = tokio::signal::ctrl_c().await;
+            tracing::info!("received ctrl-c, clearing cache");
+            let _ = std::fs::remove_dir_all(crate::config::cache_dir());
+            state_int.lock().await.cache.clear();
+        }
+    });
+
+    // SIGTERM: clean up everything and shut down
+    let shutdown_term = shutdown.clone();
+    tokio::spawn(async move {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to register SIGTERM handler");
+        sigterm.recv().await;
+        shutdown_term.notify_one();
     });
 
     loop {
@@ -116,7 +130,13 @@ pub async fn run_daemon(config: Config, socket_path: PathBuf) -> Result<()> {
             }
             _ = shutdown.notified() => {
                 tracing::info!("daemon shutting down");
-                let _ = std::fs::remove_file(&socket_path);
+                if let Err(e) = std::fs::remove_file(&socket_path) {
+                    tracing::warn!(path = %socket_path.display(), error = %e, "failed to remove socket");
+                }
+                let cache_dir = crate::config::cache_dir();
+                if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
+                    tracing::warn!(path = %cache_dir.display(), error = %e, "failed to remove cache directory");
+                }
                 return Ok(());
             }
         }
@@ -615,6 +635,160 @@ mod tests {
         daemon.await.unwrap().unwrap();
         assert!(!socket_path.exists());
     }
+
+    #[tokio::test]
+    async fn test_daemon_shutdown_cleans_cache() {
+        let dir = create_jj_repo().await;
+        let socket_path = temp_socket_path("shutdown-cache");
+        let _ = std::fs::remove_file(&socket_path);
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+
+        let daemon = tokio::spawn(run_daemon(config, socket_path.clone()));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Query to populate the cache file
+        let resp = send_request(
+            &socket_path,
+            &Request::Query {
+                repo_path: dir.path().to_string_lossy().to_string(),
+            },
+        )
+        .await;
+        assert!(matches!(resp, Response::Status { .. }));
+
+        // Verify cache file was created
+        let cache_dir = crate::config::cache_dir();
+        assert!(
+            cache_dir.exists(),
+            "cache directory should exist after query"
+        );
+
+        let cache_file = crate::config::cache_file_path(dir.path());
+        assert!(
+            cache_file.exists(),
+            "cache file should exist after query: {}",
+            cache_file.display()
+        );
+
+        // Shutdown
+        let resp = send_request(&socket_path, &Request::Shutdown).await;
+        assert_eq!(resp, Response::Ok);
+        daemon.await.unwrap().unwrap();
+
+        // Verify cleanup
+        assert!(!socket_path.exists(), "socket should be removed");
+        assert!(
+            !cache_dir.exists(),
+            "cache directory should be removed on shutdown"
+        );
+    }
+
+    /// Helper: start the daemon as a subprocess and wait for it to be ready.
+    async fn spawn_daemon_process(socket_path: &std::path::Path) -> tokio::process::Child {
+        // Find the binary: test exe is in deps/, the main binary is one dir up
+        let test_exe = std::env::current_exe().unwrap();
+        let bin_dir = test_exe.parent().unwrap().parent().unwrap();
+        let exe = bin_dir.join("vcs-status-daemon");
+        assert!(exe.exists(), "binary not found at {}", exe.display());
+
+        let child = Command::new(&exe)
+            .args(["daemon", "--socket"])
+            .arg(socket_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        // Wait for daemon to start listening
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if socket_path.exists() {
+                return child;
+            }
+        }
+        panic!("daemon did not create socket at {}", socket_path.display());
+    }
+
+    #[tokio::test]
+    async fn test_daemon_sigterm_cleans_cache() {
+        let dir = create_jj_repo().await;
+        let socket_path = temp_socket_path("sigterm-cache");
+        let _ = std::fs::remove_file(&socket_path);
+
+        // Use a unique USER so this test's cache dir is isolated from parallel tests
+        let test_user = format!("test-sigterm-{}", std::process::id());
+        let cache_dir = PathBuf::from(format!("/tmp/vcs-status-daemon-{test_user}/cache"));
+
+        // Start daemon with isolated USER
+        let test_exe = std::env::current_exe().unwrap();
+        let bin_dir = test_exe.parent().unwrap().parent().unwrap();
+        let exe = bin_dir.join("vcs-status-daemon");
+
+        let mut child = Command::new(&exe)
+            .args(["daemon", "--socket"])
+            .arg(&socket_path)
+            .env("USER", &test_user)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if socket_path.exists() {
+                break;
+            }
+        }
+        assert!(socket_path.exists(), "daemon should create socket");
+
+        // Query to populate the cache
+        let resp = send_request(
+            &socket_path,
+            &Request::Query {
+                repo_path: dir.path().to_string_lossy().to_string(),
+            },
+        )
+        .await;
+        assert!(matches!(resp, Response::Status { .. }));
+
+        assert!(
+            cache_dir.exists(),
+            "cache directory should exist after query"
+        );
+
+        // Send SIGTERM and wait for clean exit
+        let pid = child.id().expect("child should have pid");
+        std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .unwrap();
+
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .expect("daemon should exit within 5s")
+            .unwrap();
+        assert!(
+            status.success() || status.code().is_none(),
+            "daemon should exit cleanly on SIGTERM, got: {status}"
+        );
+
+        // Verify cleanup
+        assert!(
+            !socket_path.exists(),
+            "socket should be removed after SIGTERM"
+        );
+        assert!(
+            !cache_dir.exists(),
+            "cache directory should be removed after SIGTERM"
+        );
+    }
+
+
 
     #[tokio::test]
     async fn test_daemon_stale_socket() {
