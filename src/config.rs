@@ -54,11 +54,11 @@ impl Config {
         if let Some(user_tmpl) = self.templates.get(&self.template_name) {
             return user_tmpl.clone();
         }
-        if let Some(builtin) = crate::jj::builtin_template(&self.template_name) {
+        if let Some(builtin) = crate::template::builtin_template(&self.template_name) {
             return builtin.to_string();
         }
         // Unknown template_name — fall back to ascii
-        crate::jj::ASCII_FORMAT.to_string()
+        crate::template::ASCII_FORMAT.to_string()
     }
 }
 

@@ -11,7 +11,9 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 use crate::git::query_git_status;
-use crate::jj::{format_status, query_jj_status};
+use crate::jj::query_jj_status;
+use crate::protocol::{Request, Response, VcsKind};
+use crate::template::format_status;
 use crate::protocol::{Request, Response, VcsKind};
 use crate::watcher::{RepoWatcher, WatchEvent, watch_repo};
 
@@ -65,7 +67,7 @@ pub async fn run_daemon(config: Config, runtime_dir: PathBuf) -> Result<()> {
 
     // Validate the template early so the user gets immediate feedback
     let resolved = config.resolved_format();
-    if let Err(e) = crate::jj::validate_template(&resolved) {
+    if let Err(e) = crate::template::validate_template(&resolved) {
         let source = if config.format.is_some() {
             "format".to_string()
         } else {

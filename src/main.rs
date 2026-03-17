@@ -5,6 +5,7 @@ mod git;
 mod init;
 mod jj;
 mod protocol;
+mod template;
 mod watcher;
 
 use std::path::PathBuf;

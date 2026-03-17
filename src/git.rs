@@ -4,7 +4,8 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use crate::config::Config;
-use crate::jj::{RepoStatus, parse_diff_stat};
+use crate::jj::parse_diff_stat;
+use crate::template::RepoStatus;
 
 const VCS_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -349,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_git_format_with_branch() {
-        use crate::jj::format_status;
+        use crate::template::format_status;
         let dir = create_git_repo().await;
         let config = Config {
             color: false,
