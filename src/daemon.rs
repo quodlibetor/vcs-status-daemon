@@ -27,8 +27,21 @@ struct DaemonState {
 
 use crate::config::find_repo_root;
 
+/// Maximum log file size before rotation (5 MB).
+const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024;
+
 pub fn init_logging(runtime_dir: &Path) {
     std::fs::create_dir_all(runtime_dir).ok();
+
+    // Rotate on startup: if the log exceeds the limit, move it to .old (keeping one backup).
+    let log_path = runtime_dir.join("daemon.log");
+    if let Ok(meta) = log_path.metadata()
+        && meta.len() > MAX_LOG_SIZE
+    {
+        let old_path = runtime_dir.join("daemon.log.old");
+        let _ = std::fs::rename(&log_path, &old_path);
+    }
+
     let file_appender = tracing_appender::rolling::never(runtime_dir, "daemon.log");
 
     let filter =
@@ -86,10 +99,11 @@ pub async fn run_daemon(config: Config, runtime_dir: PathBuf) -> Result<()> {
     // Spawn refresh task
     tokio::spawn(refresh_task(state.clone(), watch_rx));
 
-    // Spawn idle timeout task
+    // Spawn idle timeout task (also handles log rotation)
     let state_idle = state.clone();
     let shutdown_idle = shutdown.clone();
     let idle_timeout_secs = config.idle_timeout_secs;
+    let log_dir = runtime_dir.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -98,6 +112,14 @@ pub async fn run_daemon(config: Config, runtime_dir: PathBuf) -> Result<()> {
                 tracing::info!("idle timeout, shutting down");
                 shutdown_idle.notify_one();
                 return;
+            }
+            // Rotate log if it exceeds the size limit
+            let log_path = log_dir.join("daemon.log");
+            if let Ok(meta) = log_path.metadata()
+                && meta.len() > MAX_LOG_SIZE
+            {
+                let old_path = log_dir.join("daemon.log.old");
+                let _ = std::fs::rename(&log_path, &old_path);
             }
         }
     });
