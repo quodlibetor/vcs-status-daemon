@@ -581,7 +581,6 @@ mod tests {
     }
 
     fn temp_runtime_dir(suffix: &str) -> TempDir {
-        
         TempDir::with_prefix(format!("vcs-test-{suffix}-")).unwrap()
     }
 
