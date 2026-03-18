@@ -136,6 +136,12 @@ vcs-status-daemon daemon --dir /tmp/my-daemon
 # Shut down the daemon
 vcs-status-daemon shutdown
 
+# Restart the daemon (graceful shutdown + restart)
+vcs-status-daemon restart
+
+# Show daemon status (running, PID, uptime, watched repos)
+vcs-status-daemon status
+
 # Generate shell integration code (sets $VCS_STATUS before each prompt)
 vcs-status-daemon init zsh [--starship]
 vcs-status-daemon init bash [--starship]
@@ -157,8 +163,9 @@ Both client and daemon resolve paths from a shared runtime directory:
 
 The directory contains:
 - `sock` — Unix domain socket
-- `cache/` — cached status files
-- `daemon.log` — log output
+- `pid` — daemon PID file (for `restart` and `status`)
+- `cache/` — cached status files (read by the shell function for the fastest path)
+- `daemon.log` — log output (rotated at 5 MB)
 
 The daemon also accepts a `--dir` CLI flag, which takes priority over the environment variable. When the client auto-starts the daemon, it always passes its resolved directory via `--dir` to ensure both sides agree.
 
