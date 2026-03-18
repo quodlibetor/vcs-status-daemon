@@ -14,7 +14,6 @@ use crate::git::query_git_status;
 use crate::jj::query_jj_status;
 use crate::protocol::{Request, Response, VcsKind};
 use crate::template::format_status;
-use crate::protocol::{Request, Response, VcsKind};
 use crate::watcher::{RepoWatcher, WatchEvent, watch_repo};
 
 struct DaemonState {

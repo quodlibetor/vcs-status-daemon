@@ -18,8 +18,12 @@ pub enum Request {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Response {
-    Status { formatted: String },
-    Error { message: String },
+    Status {
+        formatted: String,
+    },
+    Error {
+        message: String,
+    },
     Ok,
     DaemonStatus {
         pid: u32,

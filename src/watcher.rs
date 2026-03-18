@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
@@ -18,16 +19,82 @@ pub struct RepoWatcher {
     _watcher: RecommendedWatcher,
 }
 
+/// Build a gitignore matcher from the repo's ignore files.
+///
+/// For jj repos: loads `.gitignore` and `.jjignore` (jj respects both).
+/// For git repos: loads `.gitignore`.
+/// Also loads nested ignore files aren't handled here — just the root-level ones,
+/// which covers the vast majority of noisy paths (target/, node_modules/, .build/, etc.).
+fn build_ignore(repo_path: &Path, vcs_kind: VcsKind) -> Gitignore {
+    let canonical = repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf());
+    let mut builder = GitignoreBuilder::new(&canonical);
+
+    // Always add .gitignore (both jj and git respect it)
+    let gitignore = repo_path.join(".gitignore");
+    if gitignore.exists() {
+        builder.add(gitignore);
+    }
+
+    if vcs_kind == VcsKind::Jj {
+        let jjignore = repo_path.join(".jjignore");
+        if jjignore.exists() {
+            builder.add(jjignore);
+        }
+    }
+
+    // Also load the global gitignore if available
+    if let Some(global) = global_gitignore_path()
+        && global.exists()
+    {
+        builder.add(global);
+    }
+
+    builder.build().unwrap_or_else(|_| {
+        // If parsing fails, return an empty matcher (nothing ignored)
+        GitignoreBuilder::new(repo_path).build().unwrap()
+    })
+}
+
+/// Find the global gitignore path from git config or the default location.
+fn global_gitignore_path() -> Option<PathBuf> {
+    // Try `core.excludesFile` via git config
+    let output = std::process::Command::new("git")
+        .args(["config", "--global", "core.excludesFile"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            // Expand ~ if present
+            if let Some(rest) = path.strip_prefix("~/")
+                && let Some(home) = dirs::home_dir()
+            {
+                return Some(home.join(rest));
+            }
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    // Default: ~/.config/git/ignore
+    dirs::home_dir().map(|h| h.join(".config/git/ignore"))
+}
+
 pub fn watch_repo(
     repo_path: &Path,
     vcs_kind: VcsKind,
     tx: mpsc::UnboundedSender<WatchEvent>,
 ) -> Result<RepoWatcher> {
     let repo_path_owned = repo_path.to_path_buf();
+    let canonical_root = repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf());
     let vcs_dir = match vcs_kind {
-        VcsKind::Jj => repo_path.join(".jj"),
-        VcsKind::Git => repo_path.join(".git"),
+        VcsKind::Jj => canonical_root.join(".jj"),
+        VcsKind::Git => canonical_root.join(".git"),
     };
+    let gitignore = build_ignore(repo_path, vcs_kind);
 
     let mut watcher =
         notify::recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
@@ -41,14 +108,25 @@ pub fn watch_repo(
             // Determine if this is a working copy change or a VCS internal change
             let working_copy_changed = event.paths.iter().any(|p| !p.starts_with(&vcs_dir));
 
-            // Filter out target/ directory changes
-            let dominated_by_target = event.paths.iter().all(|p| {
-                p.strip_prefix(&repo_path_owned)
-                    .map(|rel| rel.starts_with("target"))
-                    .unwrap_or(false)
-            });
-            if dominated_by_target {
-                return;
+            // For working copy events, filter out ignored paths
+            if working_copy_changed {
+                let all_ignored = event.paths.iter().all(|p| {
+                    if p.starts_with(&vcs_dir) {
+                        return false; // VCS internal paths are never "ignored"
+                    }
+                    // Strip the canonical root to get a relative path for matching.
+                    // Use matched_path_or_any_parents so that a file inside an
+                    // ignored directory (e.g. build/output.o matching "build/")
+                    // is correctly detected as ignored.
+                    let rel = p.strip_prefix(&canonical_root).unwrap_or(p);
+                    let is_dir = p.is_dir();
+                    gitignore
+                        .matched_path_or_any_parents(rel, is_dir)
+                        .is_ignore()
+                });
+                if all_ignored {
+                    return;
+                }
             }
 
             let _ = tx.send(WatchEvent::Change {
@@ -164,5 +242,113 @@ mod tests {
             }
         }
         assert!(found, "expected working_copy_changed event");
+    }
+
+    #[tokio::test]
+    async fn test_watcher_ignores_gitignored_files() {
+        let dir = create_jj_repo().await;
+
+        // Create .gitignore and build/ directory BEFORE starting the watcher
+        // so these writes don't generate events
+        std::fs::write(dir.path().join(".gitignore"), "build/\n").unwrap();
+        std::fs::create_dir(dir.path().join("build")).unwrap();
+
+        // Small delay to let any jj-internal events from init settle
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _watcher = watch_repo(dir.path(), VcsKind::Jj, tx).unwrap();
+
+        // Drain any startup events
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Write to an ignored path — should NOT produce a working_copy_changed event
+        tokio::fs::write(dir.path().join("build/output.o"), "binary")
+            .await
+            .unwrap();
+
+        // Give the watcher time to fire
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Drain: we should not see any working_copy_changed=true events
+        let mut saw_wc_change = false;
+        while let Ok(event) = rx.try_recv() {
+            if let WatchEvent::Change {
+                working_copy_changed: true,
+                ..
+            } = event
+            {
+                saw_wc_change = true;
+            }
+        }
+        assert!(
+            !saw_wc_change,
+            "should not see working_copy_changed for gitignored file"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_watcher_passes_tracked_files_with_ignore_active() {
+        let dir = create_jj_repo().await;
+
+        // Create .gitignore and build/ directory BEFORE starting the watcher
+        std::fs::write(dir.path().join(".gitignore"), "build/\n").unwrap();
+        std::fs::create_dir(dir.path().join("build")).unwrap();
+
+        // Let jj-internal events from init settle
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _watcher = watch_repo(dir.path(), VcsKind::Jj, tx).unwrap();
+
+        // Drain any startup events
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while rx.try_recv().is_ok() {}
+
+        // 1) Write to an ignored path — should NOT produce a working_copy_changed event
+        tokio::fs::write(dir.path().join("build/output.o"), "binary")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let mut saw_ignored = false;
+        while let Ok(event) = rx.try_recv() {
+            if let WatchEvent::Change {
+                working_copy_changed: true,
+                ..
+            } = event
+            {
+                saw_ignored = true;
+            }
+        }
+        assert!(
+            !saw_ignored,
+            "should not see working_copy_changed for gitignored file"
+        );
+
+        // 2) Write to a tracked path — SHOULD produce a working_copy_changed event
+        tokio::fs::write(dir.path().join("src.txt"), "code")
+            .await
+            .unwrap();
+
+        let mut found = false;
+        for _ in 0..20 {
+            match timeout(Duration::from_secs(5), rx.recv()).await {
+                Ok(Some(WatchEvent::Change {
+                    working_copy_changed: true,
+                    ..
+                })) => {
+                    found = true;
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(
+            found,
+            "expected working_copy_changed for tracked file while ignore is active"
+        );
     }
 }
