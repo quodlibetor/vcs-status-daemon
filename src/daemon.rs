@@ -785,11 +785,7 @@ mod tests {
 
     /// Helper: start the daemon as a subprocess and wait for it to be ready.
     async fn spawn_daemon_process(runtime_dir: &std::path::Path) -> tokio::process::Child {
-        // Find the binary: test exe is in deps/, the main binary is one dir up
-        let test_exe = std::env::current_exe().unwrap();
-        let bin_dir = test_exe.parent().unwrap().parent().unwrap();
-        let exe = bin_dir.join("vcs-status-daemon");
-        assert!(exe.exists(), "binary not found at {}", exe.display());
+        let exe = assert_cmd::cargo::cargo_bin("vcs-status-daemon");
 
         let socket_path = runtime_dir.join("sock");
         let child = Command::new(&exe)
