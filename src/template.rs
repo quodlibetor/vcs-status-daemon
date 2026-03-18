@@ -6,9 +6,9 @@ use tera::Tera;
 /// jj: `xlvlt main [3 +10-5]`
 /// git: `main abc1234 [3 +10-5]`
 pub const ASCII_FORMAT: &str = "\
-{% if is_jj %}{{ change_id }}\
+{% if is_jj %}{{ MAGENTA }}JJ{{ RST }}{{ change_id }}\
 {% for b in bookmarks %} {{ BLUE }}{{ b.display }}{{ RST }}{% endfor %}\
-{% elif is_git %}{{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}\
+{% elif is_git %}{{ GREEN }}+{{ RED }}-{{ RST }} {{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}\
 {% endif %}\
 {% if total_files_changed > 0 %} {{ BLUE }}[{{ RST }}\
 {{ BRIGHT_BLUE }}{{ total_files_changed }}{{ RST }} \
@@ -19,16 +19,17 @@ pub const ASCII_FORMAT: &str = "\
 {% if divergent %} {{ BRIGHT_RED }}DIVERGENT{{ RST }}{% endif %}\
 {% if hidden %} {{ BRIGHT_YELLOW }}HIDDEN{{ RST }}{% endif %}\
 {% if immutable %} {{ YELLOW }}IMMUTABLE{{ RST }}{% endif %}\
-{% if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}";
+{% if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}\
+{% if not is_default_workspace %} {{ BRIGHT_GREEN }}/\\({{ RST }}{{ workspace_name }}{{ BRIGHT_GREEN }}/\\{{ RST }}{% endif %}";
 
 /// Built-in "nerdfont" template — requires a Nerd Font.
 ///
 /// jj: `󱗆 xlvlt  main [3 +10 -5]`
 /// git: ` main abc1234 [3 +10 -5]`
 pub const NERDFONT_FORMAT: &str = "\
-{% if is_jj %}{{ MAGENTA }}󱗆{{ RST }} {{ change_id }}\
-{% for b in bookmarks %} {{ BLUE }} {{ b.display }}{{ RST }}{% endfor %}\
-{% elif is_git %}{{ BLUE }}{{ RST }} {{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}\
+{% if is_jj %}{{ MAGENTA }}󱗆 {{ RST }}{{ change_id }}\
+{% for b in bookmarks %} {{ BLUE }}{{ b.display }}{{ RST }}{% endfor %}\
+{% elif is_git %}{{ BLUE }}\u{f02a2} {{ branch }}{{ RST }} {{ commit_id }}\
 {% endif %}\
 {% if total_files_changed > 0 %} {{ BLUE }}[{{ RST }}\
 {{ BRIGHT_BLUE }}{{ total_files_changed }}{{ RST }} \
@@ -39,7 +40,8 @@ pub const NERDFONT_FORMAT: &str = "\
 {% if divergent %} {{ BRIGHT_RED }}{{ RST }}{% endif %}\
 {% if hidden %} {{ BRIGHT_YELLOW }}󰘌{{ RST }}{% endif %}\
 {% if immutable %} {{ YELLOW }}{{ RST }}{% endif %}\
-{% if empty %} {{ DIM }}∅{{ RST }}{% endif %}";
+{% if empty %} {{ DIM }}∅{{ RST }}{% endif %}\
+{% if not is_default_workspace %} {{ BRIGHT_GREEN }}\u{F0405} ({{ RST }}{{ workspace_name }}{{ BRIGHT_GREEN }}){{ RST }}{% endif %}";
 
 /// Built-in "not ready" template for when the daemon hasn't cached status yet.
 /// Only color variables are available — no repo status values.
@@ -54,7 +56,7 @@ pub struct Bookmark {
     pub display: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RepoStatus {
     // VCS type flags
     pub is_jj: bool,
@@ -90,6 +92,40 @@ pub struct RepoStatus {
 
     // git-specific
     pub branch: String,
+
+    // Workspace/worktree
+    pub workspace_name: String,
+    pub is_default_workspace: bool,
+}
+
+impl Default for RepoStatus {
+    fn default() -> Self {
+        Self {
+            is_jj: false,
+            is_git: false,
+            commit_id: String::new(),
+            description: String::new(),
+            empty: false,
+            conflict: false,
+            files_changed: 0,
+            lines_added: 0,
+            lines_removed: 0,
+            staged_files_changed: 0,
+            staged_lines_added: 0,
+            staged_lines_removed: 0,
+            total_files_changed: 0,
+            total_lines_added: 0,
+            total_lines_removed: 0,
+            change_id: String::new(),
+            bookmarks: Vec::new(),
+            divergent: false,
+            hidden: false,
+            immutable: false,
+            branch: String::new(),
+            workspace_name: String::new(),
+            is_default_workspace: true,
+        }
+    }
 }
 
 pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String {
@@ -131,6 +167,10 @@ pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String
     // git-specific
     ctx.insert("branch", &status.branch);
     ctx.insert("has_branch", &!status.branch.is_empty());
+
+    // Workspace/worktree
+    ctx.insert("workspace_name", &status.workspace_name);
+    ctx.insert("is_default_workspace", &status.is_default_workspace);
 
     // Color codes — empty strings when color is off
     if color {
@@ -372,7 +412,8 @@ format = '''
 {%- if divergent %} {{ BRIGHT_RED }}DIVERGENT{{ RST }}{% endif %}
 {%- if hidden %} {{ BRIGHT_YELLOW }}HIDDEN{{ RST }}{% endif %}
 {%- if immutable %} {{ YELLOW }}IMMUTABLE{{ RST }}{% endif %}
-{%- if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}'''
+{%- if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}
+{%- if not is_default_workspace %} {{ BRIGHT_GREEN }}/\{{ RST }}{{ workspace_name }}{% endif %}'''
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 

@@ -196,7 +196,39 @@ pub async fn query_jj_status(
     status.total_lines_added = a;
     status.total_lines_removed = r;
 
+    // Workspace name: read from .jj/working_copy/checkout
+    // The file ends with a length-prefixed workspace name string
+    status.workspace_name = read_jj_workspace_name(repo_path);
+    status.is_default_workspace = status.workspace_name == "default";
+
     Ok(status)
+}
+
+/// Read the jj workspace name from the checkout file.
+///
+/// The `.jj/working_copy/checkout` file ends with the workspace name
+/// as trailing ASCII bytes (length-prefixed in a binary format).
+fn read_jj_workspace_name(repo_path: &Path) -> String {
+    let checkout_path = repo_path.join(".jj/working_copy/checkout");
+    let Ok(data) = std::fs::read(&checkout_path) else {
+        return "default".to_string();
+    };
+
+    // Read backwards from the end to find the ASCII workspace name
+    let end = data.len();
+    let mut start = end;
+    while start > 0
+        && (data[start - 1].is_ascii_alphanumeric()
+            || data[start - 1] == b'-'
+            || data[start - 1] == b'_')
+    {
+        start -= 1;
+    }
+    if start < end {
+        String::from_utf8_lossy(&data[start..end]).to_string()
+    } else {
+        "default".to_string()
+    }
 }
 
 #[cfg(test)]
@@ -294,6 +326,52 @@ mod tests {
                 .iter()
                 .any(|b| b.name == "main" && b.distance == 1 && b.display == "main+1")
         );
+    }
+
+    #[tokio::test]
+    async fn test_default_workspace() {
+        let dir = create_jj_repo().await;
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+        let status = query_jj_status(dir.path(), &config, false).await.unwrap();
+        assert_eq!(status.workspace_name, "default");
+        assert!(status.is_default_workspace);
+    }
+
+    #[tokio::test]
+    async fn test_named_workspace() {
+        let dir = create_jj_repo().await;
+        let work2_dir = TempDir::with_prefix("jj-ws-").unwrap();
+        // jj workspace add needs a non-existing or empty dir — use a subdir of the temp
+        let work2 = work2_dir.path().join("secondary");
+        jj_cmd(
+            dir.path(),
+            &[
+                "workspace",
+                "add",
+                "--name",
+                "secondary",
+                work2.to_str().unwrap(),
+            ],
+        )
+        .await;
+
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+
+        // Query from the secondary workspace
+        let status = query_jj_status(&work2, &config, false).await.unwrap();
+        assert_eq!(status.workspace_name, "secondary");
+        assert!(!status.is_default_workspace);
+
+        // Original workspace is still "default"
+        let status = query_jj_status(dir.path(), &config, false).await.unwrap();
+        assert_eq!(status.workspace_name, "default");
+        assert!(status.is_default_workspace);
     }
 
     #[tokio::test]

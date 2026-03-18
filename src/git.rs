@@ -103,7 +103,26 @@ pub async fn query_git_status(repo_path: &Path, _config: &Config) -> Result<Repo
         }
     };
 
-    let (branch, commit, description, unstaged_out, staged_out, total_out, empty, conflict) = tokio::join!(
+    // Worktree detection: --git-common-dir returns ".git" for the main worktree,
+    // or an absolute path for linked worktrees.
+    let worktree_fut = async {
+        run_git(repo_path, &["rev-parse", "--git-common-dir"])
+            .await
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| ".git".to_string())
+    };
+
+    let (
+        branch,
+        commit,
+        description,
+        unstaged_out,
+        staged_out,
+        total_out,
+        empty,
+        conflict,
+        git_common_dir,
+    ) = tokio::join!(
         branch_fut,
         commit_fut,
         description_fut,
@@ -111,7 +130,8 @@ pub async fn query_git_status(repo_path: &Path, _config: &Config) -> Result<Repo
         staged_fut,
         total_fut,
         empty_fut,
-        conflict_fut
+        conflict_fut,
+        worktree_fut
     );
 
     status.branch = branch.unwrap_or_default();
@@ -119,6 +139,20 @@ pub async fn query_git_status(repo_path: &Path, _config: &Config) -> Result<Repo
     status.description = description;
     status.empty = empty;
     status.conflict = conflict;
+
+    // Worktree: if git-common-dir is ".git", we're in the main worktree.
+    // Otherwise we're in a linked worktree named after the directory.
+    if git_common_dir == ".git" {
+        status.workspace_name = "main".to_string();
+        status.is_default_workspace = true;
+    } else {
+        // Use the repo directory name as the worktree name
+        status.workspace_name = repo_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "worktree".to_string());
+        status.is_default_workspace = false;
+    };
 
     let (f, a, r) = parse_diff_stat(&unstaged_out);
     status.files_changed = f;
@@ -346,6 +380,45 @@ mod tests {
         };
         let status = query_git_status(dir.path(), &config).await.unwrap();
         assert!(status.empty, "expected empty commit to be detected");
+    }
+
+    #[tokio::test]
+    async fn test_git_main_worktree() {
+        let dir = create_git_repo().await;
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+        let status = query_git_status(dir.path(), &config).await.unwrap();
+        assert_eq!(status.workspace_name, "main");
+        assert!(status.is_default_workspace);
+    }
+
+    #[tokio::test]
+    async fn test_git_linked_worktree() {
+        let dir = create_git_repo().await;
+        let wt_dir = TempDir::with_prefix("git-wt-").unwrap();
+        let wt_path = wt_dir.path().join("my-feature");
+        git_cmd(
+            dir.path(),
+            &[
+                "worktree",
+                "add",
+                wt_path.to_str().unwrap(),
+                "-b",
+                "feature",
+            ],
+        )
+        .await;
+
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+        let status = query_git_status(&wt_path, &config).await.unwrap();
+        assert_eq!(status.workspace_name, "my-feature");
+        assert!(!status.is_default_workspace);
+        assert_eq!(status.branch, "feature");
     }
 
     #[tokio::test]
