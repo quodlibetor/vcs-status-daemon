@@ -581,8 +581,8 @@ mod tests {
     }
 
     fn temp_runtime_dir(suffix: &str) -> TempDir {
-        let dir = TempDir::with_prefix(&format!("vcs-test-{suffix}-")).unwrap();
-        dir
+        
+        TempDir::with_prefix(format!("vcs-test-{suffix}-")).unwrap()
     }
 
     /// Wait for filesystem events to arrive, then flush the daemon's refresh task.
