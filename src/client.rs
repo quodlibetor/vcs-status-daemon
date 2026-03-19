@@ -36,12 +36,18 @@ fn send_request_with_timeout(
     Ok(response)
 }
 
-fn start_daemon(socket_path: &Path) -> Result<()> {
+fn start_daemon(socket_path: &Path, config_file: Option<&Path>) -> Result<()> {
     let exe = std::env::current_exe().context("failed to get current exe")?;
 
     let mut cmd = std::process::Command::new(exe);
     cmd.args(["daemon", "--dir"]);
     cmd.arg(socket_path.parent().unwrap_or(socket_path));
+
+    // Forward config file to the daemon so it uses the same config
+    if let Some(cf) = config_file {
+        cmd.args(["--config-file"]);
+        cmd.arg(cf);
+    }
 
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -63,18 +69,24 @@ fn extract_status(response: Response) -> Result<String> {
 /// Hardcoded fallback when the daemon isn't reachable within the timeout.
 const NOT_READY_FALLBACK: &str = "…";
 
-pub fn query(repo_path: &Path) -> Result<String> {
+pub fn query(repo_path: &Path, config_file: Option<&Path>) -> Result<String> {
     let socket_path = config::socket_path();
     let request = Request::Query {
         repo_path: repo_path.to_string_lossy().to_string(),
     };
+
+    // Resolve config file: explicit arg > VSD_CONFIG_FILE env var > default path
+    // Always resolve so the daemon gets an explicit path regardless of its environment.
+    let resolved_config_file = config_file
+        .map(|p| p.to_path_buf())
+        .or_else(config::config_path);
 
     // Try connecting with a short timeout (100ms)
     match send_request(&socket_path, &request) {
         Ok(response) => extract_status(response),
         Err(_) => {
             // Daemon not reachable — ensure it's running, return fallback
-            let _ = start_daemon(&socket_path);
+            let _ = start_daemon(&socket_path, resolved_config_file.as_deref());
             Ok(NOT_READY_FALLBACK.to_string())
         }
     }
@@ -92,7 +104,7 @@ pub fn shutdown() -> Result<()> {
     }
 }
 
-pub fn restart() -> Result<()> {
+pub fn restart(config_file: Option<&Path>) -> Result<()> {
     let socket_path = config::socket_path();
     let pid_path = config::pid_path();
 
@@ -123,7 +135,7 @@ pub fn restart() -> Result<()> {
     let _ = std::fs::remove_file(&pid_path);
 
     // Start a fresh daemon
-    start_daemon(&socket_path)?;
+    start_daemon(&socket_path, config_file)?;
     Ok(())
 }
 
@@ -208,7 +220,7 @@ mod tests {
         // Client calls are synchronous — run on a blocking thread so the
         // tokio executor can still drive the daemon task.
         let dir_path = dir.path().to_path_buf();
-        let result = tokio::task::spawn_blocking(move || query(&dir_path).unwrap())
+        let result = tokio::task::spawn_blocking(move || query(&dir_path, None).unwrap())
             .await
             .unwrap();
         assert!(!result.is_empty());
@@ -303,7 +315,7 @@ mod tests {
 
         let dir = create_jj_repo().await;
         let dir_path = dir.path().to_path_buf();
-        let result = tokio::task::spawn_blocking(move || query(&dir_path))
+        let result = tokio::task::spawn_blocking(move || query(&dir_path, None))
             .await
             .unwrap()
             .unwrap();

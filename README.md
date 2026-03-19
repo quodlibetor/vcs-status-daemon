@@ -100,6 +100,8 @@ eval "$(vcs-status-daemon init bash --starship)"
 
 The `--starship` flag warns if it can't find your `starship.toml` or if it's missing the `[env_var.VCS_STATUS]` section. Add this to your `starship.toml`:
 
+<details><summary>Recommended starship.toml configuration</summary>
+
 ```toml
 # Disable starship's built-in git modules (vcs-status-daemon handles both jj and git)
 [git_branch]
@@ -117,6 +119,21 @@ disabled = true
 [env_var.VCS_STATUS]
 format = "$env_value "
 ```
+
+</details>
+
+### Themes
+
+The exact output is configured via [tera templates](https://keats.github.io/tera/docs/#templates).
+
+There are several built-in templates that you can view with the
+`vcs-status-daemon template list` command:
+
+![template list output](static/template-list.png)
+
+You can set any named template with `vcs-status-daemon config set template_name NAME`.
+
+And see "Format templates" and "Configuration" below to write your own.
 
 ### Commands
 
@@ -324,9 +341,6 @@ Four templates are included. Select one with `template_name` in your config:
 template_name = "nerdfont"
 ```
 
-Preview all templates with representative sample outputs using `vcs-status-daemon template list`:
-
-![template list output](static/template-list.png)
 
 #### `ascii` (default)
 

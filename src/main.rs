@@ -8,7 +8,7 @@ mod protocol;
 mod template;
 mod watcher;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
@@ -22,6 +22,10 @@ struct Cli {
     /// Path to the jj repository (default: auto-detect)
     #[arg(long)]
     repo: Option<PathBuf>,
+
+    /// Path to config file (overrides default config path)
+    #[arg(long)]
+    config_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -31,6 +35,9 @@ enum Commands {
         /// Runtime directory (contains socket, cache, and log files)
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Path to config file
+        #[arg(long)]
+        config_file: Option<PathBuf>,
     },
     /// Query the daemon for status (default)
     Query {
@@ -86,13 +93,32 @@ enum ConfigAction {
     Edit,
     /// Print the config file path
     Path,
+    /// Set a config value (e.g. `config set template_name nerdfont`)
+    Set {
+        /// Config key (e.g. "template_name", "debounce_ms")
+        key: String,
+        /// Value to set (strings, numbers, and booleans are auto-detected)
+        value: String,
+    },
+    /// Get a config value
+    Get {
+        /// Config key (e.g. "template_name", "debounce_ms")
+        key: String,
+    },
+}
+
+/// Fast-path parsed arguments for the common client case.
+struct FastArgs {
+    repo: Option<PathBuf>,
+    config_file: Option<PathBuf>,
 }
 
 /// Fast-path arg parsing for the common client case.
-/// Returns `Some(path)` for a direct query, or `None` to fall through to clap.
-fn try_fast_args() -> Option<Option<PathBuf>> {
+/// Returns `Some(args)` for a direct query, or `None` to fall through to clap.
+fn try_fast_args() -> Option<FastArgs> {
     let mut args = std::env::args_os().skip(1);
     let mut repo = None;
+    let mut config_file = None;
 
     loop {
         let arg = match args.next() {
@@ -107,14 +133,17 @@ fn try_fast_args() -> Option<Option<PathBuf>> {
             "--repo" => {
                 repo = Some(PathBuf::from(args.next()?));
             }
+            "--config-file" => {
+                config_file = Some(PathBuf::from(args.next()?));
+            }
             _ => return None,
         }
     }
 
-    Some(repo)
+    Some(FastArgs { repo, config_file })
 }
 
-fn run_query(path: Option<PathBuf>) -> anyhow::Result<()> {
+fn run_query(path: Option<PathBuf>, config_file: Option<&Path>) -> anyhow::Result<()> {
     let path = match path {
         Some(p) => p,
         None => match std::env::current_dir() {
@@ -123,7 +152,7 @@ fn run_query(path: Option<PathBuf>) -> anyhow::Result<()> {
         },
     };
 
-    let status = client::query(&path)?;
+    let status = client::query(&path, config_file)?;
     if !status.is_empty() {
         print!("{status}");
     }
@@ -132,8 +161,8 @@ fn run_query(path: Option<PathBuf>) -> anyhow::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     // Fast path: skip clap and tokio for the common no-subcommand client case
-    if let Some(repo) = try_fast_args() {
-        return run_query(repo);
+    if let Some(fast) = try_fast_args() {
+        return run_query(fast.repo, fast.config_file.as_deref());
     }
 
     // Slow path: full clap parsing, tokio runtime only started for daemon
@@ -147,10 +176,19 @@ fn build_runtime() -> tokio::runtime::Runtime {
         .expect("failed to build tokio runtime")
 }
 
-fn run_config(action: ConfigAction) -> anyhow::Result<()> {
+fn resolve_config_path(config_file: Option<&Path>) -> Option<PathBuf> {
+    config_file
+        .map(|p| p.to_path_buf())
+        .or_else(config::config_path)
+}
+
+fn run_config(action: ConfigAction, config_file: Option<&Path>) -> anyhow::Result<()> {
     match action {
         ConfigAction::Init => {
-            let path = config::config_init_path()?;
+            let path = config_file
+                .map(|p| p.to_path_buf())
+                .map(Ok)
+                .unwrap_or_else(config::config_init_path)?;
             if path.exists() {
                 anyhow::bail!("config file already exists: {}", path.display());
             }
@@ -161,7 +199,7 @@ fn run_config(action: ConfigAction) -> anyhow::Result<()> {
             eprintln!("Wrote default config to {}", path.display());
         }
         ConfigAction::Edit => {
-            let path = config::config_path()
+            let path = resolve_config_path(config_file)
                 .filter(|p| p.exists())
                 .or_else(|| config::config_init_path().ok())
                 .ok_or_else(|| anyhow::anyhow!("could not determine config path"))?;
@@ -179,10 +217,79 @@ fn run_config(action: ConfigAction) -> anyhow::Result<()> {
             }
         }
         ConfigAction::Path => {
-            let path = config::config_path()
+            let path = resolve_config_path(config_file)
                 .or_else(|| config::config_init_path().ok())
                 .ok_or_else(|| anyhow::anyhow!("could not determine config path"))?;
             println!("{}", path.display());
+        }
+        ConfigAction::Set { key, value } => {
+            let path = resolve_config_path(config_file)
+                .or_else(|| config::config_init_path().ok())
+                .ok_or_else(|| anyhow::anyhow!("could not determine config path"))?;
+
+            // Read existing file or start from default template
+            let contents = if path.exists() {
+                std::fs::read_to_string(&path)?
+            } else {
+                config::DEFAULT_CONFIG_TOML.to_string()
+            };
+
+            let mut doc = contents
+                .parse::<toml_edit::DocumentMut>()
+                .map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))?;
+
+            // Auto-detect value type: bool, integer, or string
+            let toml_value = if value == "true" {
+                toml_edit::value(true)
+            } else if value == "false" {
+                toml_edit::value(false)
+            } else if let Ok(n) = value.parse::<i64>() {
+                toml_edit::value(n)
+            } else {
+                toml_edit::value(&value)
+            };
+
+            doc[&key] = toml_value;
+
+            // Validate the result parses as a valid Config
+            let validated: config::Config = toml::from_str(doc.to_string().as_str())
+                .map_err(|e| anyhow::anyhow!("invalid config after setting {key}={value}: {e}"))?;
+
+            // Extra validation: template_name must be a builtin or user-defined template
+            if key == "template_name"
+                && template::builtin_template(&validated.template_name).is_none()
+                && !validated.templates.contains_key(&validated.template_name)
+            {
+                let mut valid: Vec<&str> = template::BUILTIN_NAMES.to_vec();
+                let mut user_names: Vec<&str> =
+                    validated.templates.keys().map(|s| s.as_str()).collect();
+                user_names.sort();
+                valid.extend(user_names);
+                anyhow::bail!(
+                    "unknown template name \"{value}\". Valid names: {}",
+                    valid.join(", ")
+                );
+            }
+
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, doc.to_string())?;
+            eprintln!("Set {key} = {value} in {}", path.display());
+        }
+        ConfigAction::Get { key } => {
+            let cfg = config::load_config_from(config_file)?;
+            let val = match key.as_str() {
+                "idle_timeout_secs" => cfg.idle_timeout_secs.to_string(),
+                "debounce_ms" => cfg.debounce_ms.to_string(),
+                "format" => cfg.format.unwrap_or_default(),
+                "not_ready_format" => cfg.not_ready_format.unwrap_or_default(),
+                "template_name" => cfg.template_name,
+                "bookmark_search_depth" => cfg.bookmark_search_depth.to_string(),
+                "color" => cfg.color.to_string(),
+                _ => anyhow::bail!("unknown config key: {key}"),
+            };
+            println!("{val}");
         }
     }
     Ok(())
@@ -275,19 +382,22 @@ fn run_template(action: TemplateAction) -> anyhow::Result<()> {
 
 fn run_clap() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let cf = cli.config_file.as_deref();
 
     match cli.command {
-        Some(Commands::Daemon { dir }) => {
+        Some(Commands::Daemon { dir, config_file }) => {
             let runtime_dir = dir.unwrap_or_else(config::runtime_dir);
             daemon::init_logging(&runtime_dir);
-            let config = config::load_config()?;
+            // Daemon's own --config-file takes priority over the top-level one
+            let daemon_cf = config_file.as_deref().or(cf);
+            let config = config::load_config_from(daemon_cf)?;
             build_runtime().block_on(daemon::run_daemon(config, runtime_dir))?;
         }
         Some(Commands::Shutdown) => {
             client::shutdown()?;
         }
         Some(Commands::Restart) => {
-            client::restart()?;
+            client::restart(cf)?;
         }
         Some(Commands::Status) => {
             client::status()?;
@@ -296,16 +406,16 @@ fn run_clap() -> anyhow::Result<()> {
             init::run(&shell, starship)?;
         }
         Some(Commands::Config { action }) => {
-            run_config(action)?;
+            run_config(action, cf)?;
         }
         Some(Commands::Template { action }) => {
             run_template(action)?;
         }
         Some(Commands::Query { repo }) => {
-            run_query(repo.or(cli.repo))?;
+            run_query(repo.or(cli.repo), cf)?;
         }
         None => {
-            run_query(cli.repo)?;
+            run_query(cli.repo, cf)?;
         }
     }
 
