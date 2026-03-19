@@ -218,11 +218,11 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# vcs-status-daemon configuration
 # git-only:
 #   branch                         — current branch name
 #
-# Color codes (when color = true):
-#   RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE
-#   BRIGHT_RED, BRIGHT_GREEN, BRIGHT_YELLOW, BRIGHT_BLUE,
-#   BRIGHT_MAGENTA, BRIGHT_CYAN, BRIGHT_WHITE
-#   BOLD, RST (reset)
+# Color filters (applied with | syntax, e.g. {{ branch | green }}):
+#   red, green, yellow, blue, magenta, cyan, white
+#   bright_red, bright_green, bright_yellow, bright_blue,
+#   bright_magenta, bright_cyan, bright_white
+#   bold, dim
 # --------------------------------------------------------------------------
 
 # User-defined templates. Reference by name via template_name.
@@ -368,8 +368,11 @@ bookmark_search_depth = 5
 
     #[test]
     fn test_not_ready_format_custom() {
-        let toml_str = r#"not_ready_format = "{{ YELLOW }}wait{{ RST }}""#;
+        let toml_str = r#"not_ready_format = "{{ \"wait\" | yellow }}""#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.resolved_not_ready_format(), "{{ YELLOW }}wait{{ RST }}");
+        assert_eq!(
+            config.resolved_not_ready_format(),
+            "{{ \"wait\" | yellow }}"
+        );
     }
 }
