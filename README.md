@@ -150,6 +150,10 @@ vcs-status-daemon init bash [--starship]
 vcs-status-daemon config init    # write default config file
 vcs-status-daemon config edit    # open config in $EDITOR
 vcs-status-daemon config path    # print config file path
+
+# Preview templates
+vcs-status-daemon template list              # show all built-in templates with sample output
+vcs-status-daemon template format "{{ change_id }}"  # test a custom template
 ```
 
 The client sends its current directory to the daemon, which walks up the directory tree to find a repo root (`.jj/` or `.git/`). The mapping from directory to repo root is cached. When run outside a recognized repository, the client exits silently with exit code 0, making it safe for unconditional prompt use.
@@ -186,7 +190,7 @@ bookmark_search_depth = 10
 # Enable ANSI color output (default: true)
 color = true
 
-# Built-in template to use: "ascii" (default) or "nerdfont"
+# Built-in template to use: "ascii" (default), "nerdfont", "unicode", or "simple"
 template_name = "ascii"
 
 # Explicit format template (Tera syntax, overrides template_name if set)
@@ -267,7 +271,14 @@ These are populated only for git repositories. In jj repositories they are empty
 |---|---|---|
 | `branch` | string | Current branch name, or short commit hash if HEAD is detached. |
 | `has_branch` | bool | `true` if `branch` is non-empty. |
+| `rebasing` | bool | `true` if a rebase is in progress (interactive or non-interactive). |
 
+#### Workspace/worktree fields
+
+| Variable | Type | Description |
+|---|---|---|
+| `workspace_name` | string | Workspace name (jj) or worktree directory name (git). `"default"` / `"main"` for the primary workspace/worktree. |
+| `is_default_workspace` | bool | `true` if this is the default workspace (jj) or main worktree (git). |
 
 #### Bookmark objects (jj only)
 
@@ -280,80 +291,67 @@ Each item in the `bookmarks` list has:
 | `display` | string | Pre-formatted display string: `"main"` when distance is 0, `"main+2"` otherwise. |
 
 
-#### Color codes
+#### Color filters
 
-These resolve to ANSI escape sequences when `color = true` and to empty strings when `color = false`, so templates work correctly in both modes.
+Colors are applied using Tera's filter syntax: `{{ value | green }}`. When `color = true`, filters wrap the value in ANSI escape codes. When `color = false`, filters are no-ops (the value passes through unchanged).
 
-| Variable | ANSI code | Appearance |
-|---|---|---|
-| `RST` | `\e[0m` | Reset all formatting |
-| `BOLD` | `\e[1m` | Bold |
-| `DIM` | `\e[2m` | Dim |
-| `BLACK` | `\e[30m` | Black |
-| `RED` | `\e[31m` | Red |
-| `GREEN` | `\e[32m` | Green |
-| `YELLOW` | `\e[33m` | Yellow |
-| `BLUE` | `\e[34m` | Blue (dark) |
-| `MAGENTA` | `\e[35m` | Magenta |
-| `CYAN` | `\e[36m` | Cyan |
-| `WHITE` | `\e[37m` | White |
-| `BRIGHT_BLACK` | `\e[90m` | Bright black (gray) |
-| `BRIGHT_RED` | `\e[91m` | Bright red |
-| `BRIGHT_GREEN` | `\e[92m` | Bright green |
-| `BRIGHT_YELLOW` | `\e[93m` | Bright yellow |
-| `BRIGHT_BLUE` | `\e[94m` | Bright blue |
-| `BRIGHT_MAGENTA` | `\e[95m` | Bright magenta |
-| `BRIGHT_CYAN` | `\e[96m` | Bright cyan |
-| `BRIGHT_WHITE` | `\e[97m` | Bright white |
+| Filter | ANSI code |
+|---|---|
+| `bold` | `\e[1m` |
+| `dim` | `\e[2m` |
+| `red` | `\e[31m` |
+| `green` | `\e[32m` |
+| `yellow` | `\e[33m` |
+| `blue` | `\e[34m` |
+| `magenta` | `\e[35m` |
+| `cyan` | `\e[36m` |
+| `white` | `\e[37m` |
+| `bright_red` | `\e[91m` |
+| `bright_green` | `\e[92m` |
+| `bright_yellow` | `\e[93m` |
+| `bright_blue` | `\e[94m` |
+| `bright_magenta` | `\e[95m` |
+| `bright_cyan` | `\e[96m` |
+| `bright_white` | `\e[97m` |
 
+You can apply filters to variables (`{{ branch | green }}`), string literals (`{{ "CONFLICT" | bright_red }}`), or concatenated values (`{{ "+" ~ total_lines_added | bright_green }}`).
 
 ### Built-in templates
 
-Two templates are included. Select one with `template_name` in your config:
+Four templates are included. Select one with `template_name` in your config:
 
 ```toml
 template_name = "nerdfont"
 ```
 
+Preview all templates with representative sample outputs using `vcs-status-daemon template list`:
+
+![template list output](static/template-list.png)
+
 #### `ascii` (default)
 
 Works in any terminal. Example output:
 
-- **jj**: `xlvlt main [3 +10-5]` or `xlvlt (EMPTY)`
-- **git**: `main abc1234 [3 +10-5]` or `main abc1234 (EMPTY)`
-
-```tera
-{% if is_jj %}{{ change_id }}
-{%- for b in bookmarks %} {{ BLUE }}{{ b.display }}{{ RST }}{% endfor %}
-{%- elif is_git %}{{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}
-{%- endif %}
-{%- if total_files_changed > 0 %} {{ BLUE }}[{{ RST }}{{ BRIGHT_BLUE }}{{ total_files_changed }}{{ RST }} {{ BRIGHT_GREEN }}+{{ total_lines_added }}{{ RST }}{{ BRIGHT_RED }}-{{ total_lines_removed }}{{ RST }}{{ BLUE }}]{{ RST }}{% endif %}
-{%- if conflict %} {{ BRIGHT_RED }}CONFLICT{{ RST }}{% endif %}
-{%- if divergent %} {{ BRIGHT_RED }}DIVERGENT{{ RST }}{% endif %}
-{%- if hidden %} {{ BRIGHT_YELLOW }}HIDDEN{{ RST }}{% endif %}
-{%- if immutable %} {{ YELLOW }}IMMUTABLE{{ RST }}{% endif %}
-{%- if empty %} {{ BLUE }}({{ RST }}EMPTY{{ BLUE }}){{ RST }}{% endif %}
-```
+- **jj**: `JJ xlvlt main [3 +10-5]` or `JJ xlvlt (EMPTY)`
+- **git**: `+- main abc1234 [3 +10-5]` or `+- main abc1234 (EMPTY)`
 
 #### `nerdfont`
 
-Requires a [Nerd Font](https://www.nerdfonts.com/). Uses 󱗆 for jj repos and  for git repos. Example output:
+Requires a [Nerd Font](https://www.nerdfonts.com/). Uses iconic glyphs for VCS type, conflicts, divergence, etc. Example output:
 
-- **jj**: `󱗆 xlvlt  main [3 +10 -5]` or `󱗆 xlvlt ∅`
-- **git**: ` main abc1234 [3 +10 -5]` or ` main abc1234 ∅`
+- **jj**: `󱗆 xlvlt main [3 +10 -5]` or `󱗆 xlvlt ∅`
+- **git**: `󰊢 main abc1234 [3 +10 -5]` or `󰊢 main abc1234 ∅`
 
-```tera
-{% if is_jj %}{{ MAGENTA }}󱗆{{ RST }} {{ change_id }}
-{%- for b in bookmarks %} {{ BLUE }} {{ b.display }}{{ RST }}{% endfor %}
-{%- elif is_git %}{{ BLUE }}{{ RST }} {{ BLUE }}{{ branch }}{{ RST }} {{ commit_id }}
-{%- endif %}
-{%- if total_files_changed > 0 %} {{ BLUE }}[{{ RST }}{{ BRIGHT_BLUE }}{{ total_files_changed }}{{ RST }} {{ BRIGHT_GREEN }}+{{ total_lines_added }}{{ RST }} {{ BRIGHT_RED }}-{{ total_lines_removed }}{{ RST }}{{ BLUE }}]{{ RST }}{% endif %}
-{%- if conflict %} {{ BRIGHT_RED }}{{ RST }}{% endif %}
-{%- if divergent %} {{ BRIGHT_RED }}{{ RST }}{% endif %}
-{%- if hidden %} {{ BRIGHT_YELLOW }}󰘌{{ RST }}{% endif %}
-{%- if immutable %} {{ YELLOW }}{{ RST }}{% endif %}
-{%- if empty %} {{ DIM }}∅{{ RST }}{% endif %}
-```
+#### `unicode`
+
+Uses standard Unicode symbols (no Nerd Fonts needed). Example output:
+
+- **jj**: `※ xlvlt ≡ main [3 +10-5]`
+- **git**: `± main abc1234 [3 +10-5]`
+
+#### `simple`
+
+Just the branch or bookmark name, color-coded by state. Green = clean, yellow = changes, red = unstaged (git). For jj, shows the bookmark name, description, or change ID depending on context.
 
 ### User-defined templates
 
@@ -381,8 +379,8 @@ In TOML, use multi-line literal strings (`'''`) for readability. Use Tera's `{%-
 ```toml
 format = '''
 {% if is_jj %}{{ change_id }}
-{%- for b in bookmarks %} {{ b.display }}{% endfor %}
-{%- elif is_git %}{{ branch }} {{ commit_id }}
+{%- for b in bookmarks %} {{ b.display | blue }}{% endfor %}
+{%- elif is_git %}{{ branch | blue }} {{ commit_id }}
 {%- endif %}'''
 ```
 
@@ -408,14 +406,14 @@ format = "{{ branch }} {{ commit_id }}"
 
 ```toml
 format = '''
-{% if is_jj %}{{ change_id }} {{ BRIGHT_BLACK }}{{ commit_id }}{{ RST }}
-{%- for b in bookmarks %} {{ BLUE }}{{ b.display }}{{ RST }}{% endfor %}
-{%- if description %} {{ DIM }}{{ description }}{{ RST }}{% endif %}
-{%- elif is_git %}{{ BLUE }}{{ branch }}{{ RST }} {{ BRIGHT_BLACK }}{{ commit_id }}{{ RST }}
+{% if is_jj %}{{ change_id }} {{ commit_id | dim }}
+{%- for b in bookmarks %} {{ b.display | blue }}{% endfor %}
+{%- if description %} {{ description | dim }}{% endif %}
+{%- elif is_git %}{{ branch | blue }} {{ commit_id | dim }}
 {%- endif %}
-{%- if total_files_changed > 0 %} {{ BRIGHT_BLUE }}{{ total_files_changed }}f{{ RST }} {{ BRIGHT_GREEN }}+{{ total_lines_added }}{{ RST }} {{ BRIGHT_RED }}-{{ total_lines_removed }}{{ RST }}{% endif %}
-{%- if empty %} {{ YELLOW }}empty{{ RST }}{% endif %}
-{%- if conflict %} {{ BRIGHT_RED }}conflict!{{ RST }}{% endif %}'''
+{%- if total_files_changed > 0 %} {{ total_files_changed | bright_blue }}f {{ "+" ~ total_lines_added | bright_green }} {{ "-" ~ total_lines_removed | bright_red }}{% endif %}
+{%- if empty %} {{ "empty" | yellow }}{% endif %}
+{%- if conflict %} {{ "conflict!" | bright_red }}{% endif %}'''
 ```
 
 **Custom bookmark formatting** -- show distance differently (jj only):
@@ -423,8 +421,8 @@ format = '''
 ```toml
 format = '''
 {{ change_id }}
-{%- for b in bookmarks %} {{ CYAN }}{{ b.name }}{% if b.distance > 0 %}~{{ b.distance }}{% endif %}{{ RST }}{% endfor %}
-{%- if empty %} {{ DIM }}empty{{ RST }}{% endif %}'''
+{%- for b in bookmarks %} {{ b.name | cyan }}{% if b.distance > 0 %}~{{ b.distance }}{% endif %}{% endfor %}
+{%- if empty %} {{ "empty" | dim }}{% endif %}'''
 ```
 
 ## How it works
