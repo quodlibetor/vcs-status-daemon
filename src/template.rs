@@ -74,6 +74,7 @@ pub struct RepoStatus {
 
     // git-specific
     pub branch: String,
+    pub rebasing: bool,
 
     // Workspace/worktree
     pub workspace_name: String,
@@ -104,6 +105,7 @@ impl Default for RepoStatus {
             hidden: false,
             immutable: false,
             branch: String::new(),
+            rebasing: false,
             workspace_name: String::new(),
             is_default_workspace: true,
         }
@@ -203,6 +205,7 @@ pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String
     // git-specific
     ctx.insert("branch", &status.branch);
     ctx.insert("has_branch", &!status.branch.is_empty());
+    ctx.insert("rebasing", &status.rebasing);
 
     // Workspace/worktree
     ctx.insert("workspace_name", &status.workspace_name);
@@ -325,6 +328,23 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
             },
         ),
         (
+            "jj: named workspace",
+            RepoStatus {
+                is_jj: true,
+                change_id: "bfglmprs".into(),
+                commit_id: "pqr56789".into(),
+                empty: true,
+                bookmarks: vec![Bookmark {
+                    name: "main".into(),
+                    distance: 0,
+                    display: "main".into(),
+                }],
+                workspace_name: "secondary".into(),
+                is_default_workspace: false,
+                ..Default::default()
+            },
+        ),
+        (
             "git: clean",
             RepoStatus {
                 is_git: true,
@@ -367,19 +387,14 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
             },
         ),
         (
-            "jj: named workspace",
+            "git: rebasing",
             RepoStatus {
-                is_jj: true,
-                change_id: "bfglmprs".into(),
-                commit_id: "pqr56789".into(),
-                empty: true,
-                bookmarks: vec![Bookmark {
-                    name: "main".into(),
-                    distance: 0,
-                    display: "main".into(),
-                }],
-                workspace_name: "secondary".into(),
-                is_default_workspace: false,
+                is_git: true,
+                branch: "feature".into(),
+                commit_id: "uvw8901".into(),
+                description: "wip".into(),
+                rebasing: true,
+                conflict: true,
                 ..Default::default()
             },
         ),

@@ -112,6 +112,21 @@ pub async fn query_git_status(repo_path: &Path, _config: &Config) -> Result<Repo
             .unwrap_or_else(|_| ".git".to_string())
     };
 
+    // Rebase detection: check for rebase-merge/ or rebase-apply/ in the
+    // per-worktree git dir (not the common dir).
+    let rebase_fut = async {
+        let git_dir = run_git(repo_path, &["rev-parse", "--git-dir"])
+            .await
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| ".git".to_string());
+        let git_dir = if std::path::Path::new(&git_dir).is_absolute() {
+            std::path::PathBuf::from(git_dir)
+        } else {
+            repo_path.join(git_dir)
+        };
+        git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
+    };
+
     let (
         branch,
         commit,
@@ -122,6 +137,7 @@ pub async fn query_git_status(repo_path: &Path, _config: &Config) -> Result<Repo
         empty,
         conflict,
         git_common_dir,
+        rebasing,
     ) = tokio::join!(
         branch_fut,
         commit_fut,
@@ -131,7 +147,8 @@ pub async fn query_git_status(repo_path: &Path, _config: &Config) -> Result<Repo
         total_fut,
         empty_fut,
         conflict_fut,
-        worktree_fut
+        worktree_fut,
+        rebase_fut
     );
 
     status.branch = branch.unwrap_or_default();
@@ -139,6 +156,7 @@ pub async fn query_git_status(repo_path: &Path, _config: &Config) -> Result<Repo
     status.description = description;
     status.empty = empty;
     status.conflict = conflict;
+    status.rebasing = rebasing;
 
     // Worktree: if git-common-dir is ".git", we're in the main worktree.
     // Otherwise we're in a linked worktree named after the directory.
@@ -419,6 +437,48 @@ mod tests {
         assert_eq!(status.workspace_name, "my-feature");
         assert!(!status.is_default_workspace);
         assert_eq!(status.branch, "feature");
+    }
+
+    #[tokio::test]
+    async fn test_git_not_rebasing() {
+        let dir = create_git_repo().await;
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+        let status = query_git_status(dir.path(), &config).await.unwrap();
+        assert!(!status.rebasing);
+    }
+
+    #[tokio::test]
+    async fn test_git_rebasing() {
+        let dir = create_git_repo().await;
+        // Simulate an in-progress rebase by creating the rebase-merge directory
+        std::fs::create_dir_all(dir.path().join(".git/rebase-merge")).unwrap();
+
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+        let status = query_git_status(dir.path(), &config).await.unwrap();
+        assert!(status.rebasing, "expected rebasing to be true");
+    }
+
+    #[tokio::test]
+    async fn test_git_rebase_apply() {
+        let dir = create_git_repo().await;
+        // Simulate an in-progress rebase-apply (non-interactive rebase / am)
+        std::fs::create_dir_all(dir.path().join(".git/rebase-apply")).unwrap();
+
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+        let status = query_git_status(dir.path(), &config).await.unwrap();
+        assert!(
+            status.rebasing,
+            "expected rebasing to be true for rebase-apply"
+        );
     }
 
     #[tokio::test]

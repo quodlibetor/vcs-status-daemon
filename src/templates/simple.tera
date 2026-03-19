@@ -18,5 +18,6 @@
   {%- endif -%}
 {%- endif -%}
 {% if not is_default_workspace %} {{ "木" | bright_green }}{% endif -%}
+{% if rebasing %} {{ "REBASING" | bright_magenta }}{% endif -%}
 {% if conflict %} {{ "CONFLICT" | bright_red }}{% endif -%}
 {% if divergent %} {{ "DIVERGENT" | bright_red }}{% endif %}

@@ -217,6 +217,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# vcs-status-daemon configuration
 #
 # git-only:
 #   branch                         — current branch name
+#   rebasing                       — true during a rebase
 #
 # Color filters (applied with | syntax, e.g. {{ branch | green }}):
 #   red, green, yellow, blue, magenta, cyan, white
