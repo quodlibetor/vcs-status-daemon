@@ -95,6 +95,7 @@ pub fn query(repo_path: &Path, config_file: Option<&Path>) -> Result<String> {
     let socket_path = config::socket_path();
     let request = Request::Query {
         repo_path: repo_path.to_string_lossy().to_string(),
+        timeout_override_ms: 0,
     };
 
     // Resolve config file: explicit arg > VSD_CONFIG_FILE env var > default path
