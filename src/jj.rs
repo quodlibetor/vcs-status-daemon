@@ -427,7 +427,7 @@ fn is_commit_immutable(
     };
 
     let mut diagnostics = RevsetDiagnostics::new();
-    let Ok(expression) = revset::parse(&mut diagnostics, "immutable_heads()::", &context) else {
+    let Ok(expression) = revset::parse(&mut diagnostics, "::immutable_heads()", &context) else {
         return false;
     };
 
@@ -598,7 +598,7 @@ async fn query_jj_lib(repo_path: &Path, depth: u32) -> Result<(RepoStatus, JjRep
     // Hidden
     status.hidden = commit.is_hidden(repo.as_ref()).unwrap_or(false);
 
-    // Immutable: check if commit is an ancestor of any immutable head
+    // Immutable: check if commit is an immutable head or an ancestor of one
     // (trunk bookmarks, tags, untracked remote bookmarks).
     status.immutable = {
         let _span = tracing::debug_span!("check_immutable").entered();
