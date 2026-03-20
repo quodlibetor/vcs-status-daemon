@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
+  RUST_BACKTRACE: "1"
 
 jobs:
   check:
@@ -54,4 +55,4 @@ jobs:
         run: cargo binstall --no-confirm --strategies crate-meta-data jj-cli
       - name: Build tests
         run: cargo test --no-run
-      - run: cargo nextest run
+      - run: cargo nextest run --no-fail-fast

@@ -9,11 +9,24 @@ pub enum VcsKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Request {
-    Query { repo_path: String },
+    Query {
+        repo_path: String,
+        timeout_override_ms: u64,
+    },
     Flush,
     Shutdown,
     DaemonStatus,
     Version,
+}
+
+impl Request {
+    #[cfg(test)]
+    pub fn test_query(repo_path: impl Into<String>) -> Request {
+        Request::Query {
+            repo_path: repo_path.into(),
+            timeout_override_ms: 2_000,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -78,9 +91,7 @@ mod tests {
 
     #[test]
     fn test_request_roundtrip() {
-        let query = Request::Query {
-            repo_path: "/tmp/repo".to_string(),
-        };
+        let query = Request::test_query("repo_path");
         let json = serde_json::to_string(&query).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, query);
