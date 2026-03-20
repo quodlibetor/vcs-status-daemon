@@ -450,7 +450,12 @@ fn run_clap() -> anyhow::Result<()> {
             // Daemon's own --config-file takes priority over the top-level one
             let daemon_cf = config_file.as_deref().or(cf);
             let config = config::load_config_from(daemon_cf)?;
-            build_runtime().block_on(daemon::run_daemon(config, runtime_dir))?;
+            // Resolve the config file path for hot-reload watching.
+            // Use explicit --config-file if given, otherwise fall back to the default path.
+            let watch_cf = daemon_cf
+                .map(|p| p.to_path_buf())
+                .or_else(config::config_path);
+            build_runtime().block_on(daemon::run_daemon(config, runtime_dir, watch_cf))?;
         }
         Some(Commands::Shutdown) => {
             client::shutdown()?;
