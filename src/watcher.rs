@@ -207,25 +207,10 @@ pub fn watch_repo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use tokio::process::Command;
     use tokio::time::{Duration, timeout};
 
-    async fn create_jj_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        let output = Command::new("jj")
-            .args(["git", "init"])
-            .current_dir(dir.path())
-            .output()
-            .await
-            .expect("failed to run `jj git init` — is `jj` installed and in PATH?");
-        assert!(
-            output.status.success(),
-            "jj git init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        dir
-    }
+    use crate::test_util::create_jj_repo_async as create_jj_repo;
 
     #[tokio::test]
     async fn test_watcher_detects_jj_op() {

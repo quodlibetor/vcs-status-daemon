@@ -6,6 +6,8 @@ mod init;
 mod jj;
 mod protocol;
 mod template;
+#[cfg(test)]
+mod test_util;
 mod watcher;
 
 use std::path::{Path, PathBuf};
@@ -467,8 +469,16 @@ fn run_clap() -> anyhow::Result<()> {
             let watch_cf = daemon_cf
                 .map(|p| p.to_path_buf())
                 .or_else(config::config_path);
-            build_runtime()
-                .block_on(daemon::run_daemon(config, runtime_dir, watch_cf, config_err))?;
+            let rt = build_runtime();
+            rt.block_on(daemon::run_daemon(
+                config,
+                runtime_dir,
+                watch_cf,
+                config_err,
+            ))?;
+            // Bound the shutdown: don't wait forever for in-flight spawn_blocking
+            // tasks (e.g. jj-lib refresh) when the daemon is exiting.
+            rt.shutdown_timeout(std::time::Duration::from_secs(2));
         }
         Some(Commands::Shutdown) => {
             client::shutdown()?;

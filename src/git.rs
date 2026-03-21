@@ -462,35 +462,7 @@ mod tests {
     use tempfile::TempDir;
     use tokio::process::Command;
 
-    async fn create_git_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        let run = |args: &[&str]| {
-            let dir_path = dir.path().to_path_buf();
-            let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-            async move {
-                let output = Command::new("git")
-                    .args(&args)
-                    .current_dir(&dir_path)
-                    .output()
-                    .await
-                    .unwrap();
-                assert!(
-                    output.status.success(),
-                    "git {:?} failed: {}",
-                    args,
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-        };
-        run(&["init"]).await;
-        run(&["config", "user.email", "test@test.com"]).await;
-        run(&["config", "user.name", "Test"]).await;
-        // Create an initial commit so HEAD exists
-        std::fs::write(dir.path().join("README"), "init\n").unwrap();
-        run(&["add", "."]).await;
-        run(&["commit", "-m", "initial"]).await;
-        dir
-    }
+    use crate::test_util::create_git_repo_async as create_git_repo;
 
     async fn git_cmd(repo: &std::path::Path, args: &[&str]) {
         let output = Command::new("git")
@@ -791,37 +763,7 @@ mod tests {
     }
 
     /// Parse the summary line from `git diff --stat` output.
-    fn parse_diff_stat_summary(output: &str) -> (u32, u32, u32) {
-        let Some(summary) = output.lines().rev().find(|l| l.contains("changed")) else {
-            return (0, 0, 0);
-        };
-        let mut files = 0u32;
-        let mut insertions = 0u32;
-        let mut deletions = 0u32;
-        for part in summary.split(',') {
-            let part = part.trim();
-            if part.contains("changed") {
-                files = part
-                    .split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            } else if part.contains("insertion") {
-                insertions = part
-                    .split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            } else if part.contains("deletion") {
-                deletions = part
-                    .split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            }
-        }
-        (files, insertions, deletions)
-    }
+    use crate::test_util::parse_diff_stat_summary;
 
     async fn git_output(repo: &std::path::Path, args: &[&str]) -> String {
         let output = Command::new("git")

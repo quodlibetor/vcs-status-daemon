@@ -3633,6 +3633,7 @@ dependencies = [
  "ignore",
  "jj-lib",
  "notify",
+ "pollster",
  "serde",
  "serde_json",
  "tempfile",
