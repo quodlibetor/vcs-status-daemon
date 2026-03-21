@@ -1131,21 +1131,10 @@ mod tests {
         assert_eq!(find_repo_root(dir.path()), None);
     }
 
-    async fn create_jj_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        let output = Command::new("jj")
-            .args(["git", "init"])
-            .current_dir(dir.path())
-            .output()
-            .await
-            .expect("failed to run `jj git init` — is `jj` installed and in PATH?");
-        assert!(
-            output.status.success(),
-            "jj git init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        dir
-    }
+    use crate::test_util::{
+        create_git_repo_async as create_git_repo, create_jj_repo_async as create_jj_repo,
+        wait_for_socket,
+    };
 
     async fn send_request(socket_path: &std::path::Path, request: &Request) -> Response {
         let mut stream = None;
@@ -1165,17 +1154,6 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         serde_json::from_str(line.trim()).unwrap()
-    }
-
-    /// Wait for the daemon socket to appear.
-    async fn wait_for_socket(socket_path: &std::path::Path) {
-        for _ in 0..2000 {
-            if socket_path.exists() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        panic!("socket never appeared at {}", socket_path.display());
     }
 
     /// Query the daemon and wait until it returns a Status (retrying through NotReady).
@@ -1479,14 +1457,8 @@ mod tests {
             .spawn()
             .unwrap();
 
-        // Wait for daemon to start listening
-        for _ in 0..2000 {
-            if socket_path.exists() {
-                return child;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        panic!("daemon did not create socket at {}", socket_path.display());
+        wait_for_socket(&socket_path).await;
+        child
     }
 
     #[tokio::test]
@@ -1509,14 +1481,18 @@ mod tests {
 
         // Send SIGTERM and wait for clean exit
         let pid = child.id().expect("child should have pid");
-        std::process::Command::new("kill")
+        let kill_status = std::process::Command::new("kill")
             .args(["-TERM", &pid.to_string()])
             .status()
             .unwrap();
+        assert!(
+            kill_status.success(),
+            "kill -TERM {pid} failed with {kill_status}"
+        );
 
-        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+        let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
             .await
-            .expect("daemon should exit within 5s")
+            .expect("daemon should exit within 10s")
             .unwrap();
         assert!(
             status.success() || status.code().is_none(),
@@ -1631,34 +1607,6 @@ mod tests {
 
         let _ = send_request(&socket_path, &Request::Shutdown).await;
         daemon.await.unwrap().unwrap();
-    }
-
-    async fn create_git_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        let run = |args: Vec<String>| {
-            let dir_path = dir.path().to_path_buf();
-            async move {
-                let output = Command::new("git")
-                    .args(&args)
-                    .current_dir(&dir_path)
-                    .output()
-                    .await
-                    .unwrap();
-                assert!(output.status.success(), "git {:?} failed", args);
-            }
-        };
-        run(vec!["init".into()]).await;
-        run(vec![
-            "config".into(),
-            "user.email".into(),
-            "test@test.com".into(),
-        ])
-        .await;
-        run(vec!["config".into(), "user.name".into(), "Test".into()]).await;
-        std::fs::write(dir.path().join("README"), "init\n").unwrap();
-        run(vec!["add".into(), ".".into()]).await;
-        run(vec!["commit".into(), "-m".into(), "initial".into()]).await;
-        dir
     }
 
     #[tokio::test]

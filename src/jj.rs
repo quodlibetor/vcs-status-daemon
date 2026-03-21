@@ -825,21 +825,7 @@ mod tests {
     use tempfile::TempDir;
     use tokio::process::Command;
 
-    async fn create_jj_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        let output = Command::new("jj")
-            .args(["git", "init"])
-            .current_dir(dir.path())
-            .output()
-            .await
-            .expect("failed to run `jj git init` — is `jj` installed and in PATH?");
-        assert!(
-            output.status.success(),
-            "jj git init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        dir
-    }
+    use crate::test_util::create_jj_repo_async as create_jj_repo;
 
     async fn jj_cmd(repo: &Path, args: &[&str]) -> String {
         let output = Command::new("jj")
@@ -985,37 +971,7 @@ mod tests {
 
     /// Parse the summary line from `diff --stat` output.
     /// Handles: " 3 files changed, 10 insertions(+), 5 deletions(-)"
-    fn parse_diff_stat_summary(output: &str) -> (u32, u32, u32) {
-        let Some(summary) = output.lines().rev().find(|l| l.contains("changed")) else {
-            return (0, 0, 0);
-        };
-        let mut files = 0u32;
-        let mut insertions = 0u32;
-        let mut deletions = 0u32;
-        for part in summary.split(',') {
-            let part = part.trim();
-            if part.contains("changed") {
-                files = part
-                    .split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            } else if part.contains("insertion") {
-                insertions = part
-                    .split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            } else if part.contains("deletion") {
-                deletions = part
-                    .split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            }
-        }
-        (files, insertions, deletions)
-    }
+    use crate::test_util::parse_diff_stat_summary;
 
     /// Complex scenario: multiple files added, deleted, and modified with
     /// line-level changes. Verifies our diff stats match `jj diff --stat`.

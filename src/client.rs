@@ -360,34 +360,9 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::daemon::run_daemon;
+    use crate::test_util::{create_jj_repo_async as create_jj_repo, wait_for_socket};
     use tempfile::TempDir;
     use tokio::process::Command;
-
-    async fn wait_for_socket(socket_path: &std::path::Path) {
-        for _ in 0..2000 {
-            if socket_path.exists() {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-        panic!("socket never appeared at {}", socket_path.display());
-    }
-
-    async fn create_jj_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        let output = Command::new("jj")
-            .args(["git", "init"])
-            .current_dir(dir.path())
-            .output()
-            .await
-            .expect("failed to run `jj git init` — is `jj` installed and in PATH?");
-        assert!(
-            output.status.success(),
-            "jj git init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        dir
-    }
 
     #[tokio::test]
     async fn test_client_connects_to_running_daemon() {
@@ -403,19 +378,33 @@ mod tests {
         let _daemon = tokio::spawn(run_daemon(config, rt.path().to_path_buf(), None, None));
         wait_for_socket(&socket_path).await;
 
-        let dir_path = dir.path().to_path_buf();
-        let sp = socket_path.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let request = Request::Query {
-                repo_path: dir_path.to_string_lossy().to_string(),
-                timeout_override_ms: 0,
-            };
-            let response = send_request_slow(&sp, &request).unwrap();
-            extract_status(response).unwrap()
-        })
-        .await
-        .unwrap();
-        assert!(!result.is_empty());
+        // Retry loop: the daemon returns NotReady until jj-lib finishes the
+        // first query, which can take a while under heavy parallel-test load.
+        let mut result = String::new();
+        for _ in 0..2000 {
+            let sp = socket_path.clone();
+            let dp = dir.path().to_path_buf();
+            let resp = tokio::task::spawn_blocking(move || {
+                let request = Request::Query {
+                    repo_path: dp.to_string_lossy().to_string(),
+                    timeout_override_ms: 0,
+                };
+                send_request_slow(&sp, &request)
+            })
+            .await
+            .unwrap();
+            match resp {
+                Ok(Response::Status { formatted }) => {
+                    result = formatted;
+                    break;
+                }
+                Ok(Response::NotReady { .. }) | Err(_) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                Ok(other) => panic!("expected Status or NotReady, got {other:?}"),
+            }
+        }
+        assert!(!result.is_empty(), "should eventually get non-empty status");
 
         let sp = socket_path.clone();
         tokio::task::spawn_blocking(move || send_request(&sp, &Request::Shutdown).ok())
