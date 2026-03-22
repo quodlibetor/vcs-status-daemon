@@ -110,6 +110,8 @@ enum Commands {
         #[command(subcommand)]
         action: TemplateAction,
     },
+    /// Update to the latest release
+    SelfUpdate,
 }
 
 #[derive(Subcommand)]
@@ -169,7 +171,7 @@ fn try_fast_args() -> Option<FastArgs> {
         match s {
             // Subcommands and help flags → fall through to clap
             "daemon" | "shutdown" | "query" | "config" | "init" | "restart" | "status"
-            | "template" | "-h" | "--help" => return None,
+            | "template" | "self-update" | "-h" | "--help" => return None,
             "-V" | "--version" => {
                 print_version();
                 std::process::exit(0);
@@ -442,6 +444,46 @@ fn run_template(action: TemplateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn self_update() -> anyhow::Result<()> {
+    let mut updater = axoupdater::AxoUpdater::new_for("vcs-status-daemon");
+    let current: axoupdater::Version = env!("CARGO_PKG_VERSION")
+        .parse()
+        .expect("CARGO_PKG_VERSION is not a valid semver version");
+    updater.set_current_version(current)?;
+
+    if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")) {
+        updater.set_github_token(&token);
+    }
+
+    // The install receipt is written by cargo-dist's shell installer. If it's
+    // missing, the binary was installed some other way (homebrew, built from
+    // source, etc.) and we shouldn't overwrite it.
+    if let Err(e) = updater.load_receipt() {
+        tracing::info!(error = %e, "Unable to load install receipt, recommending package manager");
+        anyhow::bail!(
+            "vcs-status-daemon was not installed via the shell installer.\n\
+            Use your package manager to update instead."
+        );
+    }
+
+    if !updater.is_update_needed_sync()? {
+        let (version, _, _) = protocol::version_info();
+        eprintln!("Already up to date ({version})");
+        return Ok(());
+    }
+
+    if let Some(result) = updater.run_sync()? {
+        eprintln!("Updated vcs-status-daemon to {}", result.new_version_tag);
+    }
+
+    // Restart the daemon so it picks up the new binary
+    if client::shutdown().is_ok() {
+        eprintln!("Stopped running daemon (it will restart on next query)");
+    }
+
+    Ok(())
+}
+
 fn run_clap() -> anyhow::Result<()> {
     let cli = Cli::parse();
     config::check_not_root(cli.allow_root)?;
@@ -497,6 +539,9 @@ fn run_clap() -> anyhow::Result<()> {
         }
         Some(Commands::Template { action }) => {
             run_template(action)?;
+        }
+        Some(Commands::SelfUpdate) => {
+            self_update()?;
         }
         Some(Commands::Query { repo }) => {
             run_query(repo.or(cli.repo), cf)?;
