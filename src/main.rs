@@ -111,7 +111,11 @@ enum Commands {
         action: TemplateAction,
     },
     /// Update to the latest release
-    SelfUpdate,
+    SelfUpdate {
+        /// Just check if an update is available, don't install it
+        #[arg(long)]
+        check: bool,
+    },
 
     /// Print the directory layout version (used internally for upgrade cleanup)
     #[command(hide = true)]
@@ -448,7 +452,59 @@ fn run_template(action: TemplateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn self_update() -> anyhow::Result<()> {
+/// Query the latest release version from GitHub without needing an install receipt.
+/// Returns `Some(latest_version)` if a newer version exists, `None` if up to date.
+fn check_latest_version() -> anyhow::Result<Option<String>> {
+    use axoupdater::{ReleaseSource, ReleaseSourceType};
+
+    let mut updater = axoupdater::AxoUpdater::new_for("vcs-status-daemon");
+    let current: axoupdater::Version = env!("CARGO_PKG_VERSION")
+        .parse()
+        .expect("CARGO_PKG_VERSION is not a valid semver version");
+    updater.set_current_version(current.clone())?;
+    updater.set_release_source(ReleaseSource {
+        release_type: ReleaseSourceType::GitHub,
+        owner: "quodlibetor".to_string(),
+        name: "vcs-status-daemon".to_string(),
+        app_name: "vcs-status-daemon".to_string(),
+    });
+
+    if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")) {
+        updater.set_github_token(&token);
+    }
+
+    // query_new_version fetches from GitHub and returns the latest version.
+    // We can't use is_update_needed_sync here because it requires a loaded
+    // install receipt (check_receipt_is_for_this_executable).
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let latest = rt.block_on(updater.query_new_version())?;
+    match latest {
+        Some(v) if *v > current => Ok(Some(v.to_string())),
+        _ => Ok(None),
+    }
+}
+
+fn self_update(check: bool) -> anyhow::Result<()> {
+    let (current_version, _, _) = protocol::version_info();
+
+    if check {
+        match check_latest_version() {
+            Ok(Some(new_version)) => {
+                eprintln!("Update available: {current_version} -> {new_version}");
+                eprintln!("Run `vcs-status-daemon self-update` to install");
+            }
+            Ok(None) => {
+                eprintln!("Already up to date ({current_version})");
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to check for updates: {e}");
+            }
+        }
+        return Ok(());
+    }
+
     let mut updater = axoupdater::AxoUpdater::new_for("vcs-status-daemon");
     let current: axoupdater::Version = env!("CARGO_PKG_VERSION")
         .parse()
@@ -464,15 +520,21 @@ fn self_update() -> anyhow::Result<()> {
     // source, etc.) and we shouldn't overwrite it.
     if let Err(e) = updater.load_receipt() {
         tracing::info!(error = %e, "Unable to load install receipt, recommending package manager");
+        let update_hint = match check_latest_version() {
+            Ok(Some(new_version)) => {
+                format!(" (update available: {current_version} -> {new_version})")
+            }
+            Ok(None) => format!(" (already up to date, {current_version})"),
+            Err(_) => String::new(),
+        };
         anyhow::bail!(
-            "vcs-status-daemon was not installed via the shell installer.\n\
+            "vcs-status-daemon was not installed via the shell installer{update_hint}.\n\
             Use your package manager to update instead."
         );
     }
 
     if !updater.is_update_needed_sync()? {
-        let (version, _, _) = protocol::version_info();
-        eprintln!("Already up to date ({version})");
+        eprintln!("Already up to date ({current_version})");
         return Ok(());
     }
 
@@ -544,8 +606,8 @@ fn run_clap() -> anyhow::Result<()> {
         Some(Commands::Template { action }) => {
             run_template(action)?;
         }
-        Some(Commands::SelfUpdate) => {
-            self_update()?;
+        Some(Commands::SelfUpdate { check }) => {
+            self_update(check)?;
         }
         Some(Commands::DirectoryVersion) => {
             println!("{}", daemon::DIRECTORY_VERSION);

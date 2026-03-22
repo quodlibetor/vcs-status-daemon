@@ -109,7 +109,7 @@ pub fn init_logging(runtime_dir: &Path) {
     let file_appender = tracing_appender::rolling::never(runtime_dir, "daemon.log");
 
     let filter =
-        EnvFilter::try_from_env("VCS_STATUS_DAEMON_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+        EnvFilter::try_from_env("VCS_STATUS_DAEMON_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_appender)
@@ -141,7 +141,12 @@ pub async fn run_daemon(
 ) -> Result<()> {
     let socket_path = runtime_dir.join("sock");
     let cache_dir = runtime_dir.join("cache");
+    let (version, git_hash, _) = crate::protocol::version_info();
     tracing::info!(
+        version = %version,
+        git_hash = %git_hash,
+        pid = std::process::id(),
+        runtime_dir = %runtime_dir.display(),
         template_name = %config.template_name,
         has_format_override = config.format.is_some(),
         "starting daemon"
@@ -188,7 +193,6 @@ pub async fn run_daemon(
     std::fs::write(&pid_path, std::process::id().to_string()).ok();
 
     // Write version file so clients can detect version mismatches without a socket round-trip
-    let (version, git_hash, _) = crate::protocol::version_info();
     std::fs::write(runtime_dir.join("version"), format!("{version} {git_hash}")).ok();
 
     let (watch_tx, watch_rx) = mpsc::unbounded_channel();
@@ -324,6 +328,9 @@ pub async fn run_daemon(
         }
     });
 
+    // Shared flag: when true, shutdown triggers exec-restart instead of exit
+    let restart_requested = Arc::new(AtomicBool::new(false));
+
     // SIGTERM: clean up everything and shut down
     let shutdown_term = shutdown.clone();
     tokio::spawn(async move {
@@ -331,6 +338,18 @@ pub async fn run_daemon(
             .expect("failed to register SIGTERM handler");
         sigterm.recv().await;
         shutdown_term.notify_one();
+    });
+
+    // SIGHUP: restart the daemon (e.g. after package manager update)
+    let shutdown_hup = shutdown.clone();
+    let restart_hup = restart_requested.clone();
+    tokio::spawn(async move {
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("failed to register SIGHUP handler");
+        sighup.recv().await;
+        tracing::info!("received SIGHUP, restarting daemon");
+        restart_hup.store(true, Ordering::Relaxed);
+        shutdown_hup.notify_one();
     });
 
     // Watch config file for changes and hot-reload on valid updates
@@ -342,7 +361,6 @@ pub async fn run_daemon(
     }
 
     // Watch for binary replacement and auto-restart
-    let restart_requested = Arc::new(AtomicBool::new(false));
     let shutdown_exe = shutdown.clone();
     let restart_exe = restart_requested.clone();
     tokio::spawn(async move {
@@ -459,6 +477,7 @@ async fn handle_connection(
                 if !st.watchers.contains_key(&repo_path)
                     && let Ok(watcher) = watch_repo(&repo_path, vcs_kind, watch_tx.clone())
                 {
+                    tracing::info!(repo = %repo_path.display(), vcs = ?vcs_kind, "watching repo");
                     st.watchers.insert(repo_path.clone(), watcher);
                 }
 
@@ -1057,9 +1076,10 @@ async fn watch_binary(shutdown: Arc<Notify>, restart: Arc<AtomicBool>) -> Result
         .canonicalize()
         .unwrap_or_else(|_| exe_path.clone());
 
-    let original_ino = std::fs::metadata(&exe_path)
-        .context("failed to stat binary")?
-        .ino();
+    let original_meta = std::fs::metadata(&exe_path).context("failed to stat binary")?;
+    let original_ino = original_meta.ino();
+    let original_mtime = original_meta.mtime();
+    let original_size = original_meta.size();
 
     let watch_dir = exe_path
         .parent()
@@ -1076,7 +1096,7 @@ async fn watch_binary(shutdown: Arc<Notify>, restart: Arc<AtomicBool>) -> Result
         notify::Config::default(),
     )?;
     watcher.watch(&watch_dir, RecursiveMode::NonRecursive)?;
-    tracing::info!(path = %exe_path.display(), ino = original_ino, "watching binary for replacement");
+    tracing::info!(path = %exe_path.display(), ino = original_ino, size = original_size, "watching binary for replacement");
 
     while let Some(event) = rx.recv().await {
         let affects_exe = match event.kind {
@@ -1092,18 +1112,23 @@ async fn watch_binary(shutdown: Arc<Notify>, restart: Arc<AtomicBool>) -> Result
         // Small delay to let the write/rename finish
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Check if the file at our path is now a different inode
+        // Check if the file at our path changed (different inode, mtime, or size)
         let Ok(meta) = std::fs::metadata(&exe_path) else {
             continue;
         };
-        if meta.ino() == original_ino {
+        let new_ino = meta.ino();
+        let new_mtime = meta.mtime();
+        let new_size = meta.size();
+        if new_ino == original_ino && new_mtime == original_mtime && new_size == original_size {
             continue;
         }
 
         tracing::info!(
             path = %exe_path.display(),
             old_ino = original_ino,
-            new_ino = meta.ino(),
+            new_ino,
+            old_size = original_size,
+            new_size,
             "binary replaced, restarting daemon"
         );
         restart.store(true, Ordering::Relaxed);
