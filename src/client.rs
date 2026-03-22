@@ -306,7 +306,12 @@ pub fn status() -> Result<()> {
                 let hit_rate = stats.cache_hits as f64 / stats.queries as f64 * 100.0;
                 eprintln!("  hit rate:      {hit_rate:.1}%");
             }
-            eprintln!("  refreshes:     {}", stats.refreshes);
+            eprintln!(
+                "  refreshes:     {} ({} full, {} incremental)",
+                stats.full_refreshes + stats.incremental_refreshes,
+                stats.full_refreshes,
+                stats.incremental_refreshes
+            );
             eprintln!(
                 "  fs events:     {} ({} ignored)",
                 stats.fs_events, stats.fs_events_ignored
@@ -321,8 +326,25 @@ pub fn status() -> Result<()> {
                 let p99 = sorted[((len as f64 * 0.99) as usize).min(len - 1)];
                 let max = sorted[len - 1];
                 eprintln!(
-                    "  timing (last {len}): p50={p50:.1}ms p95={p95:.1}ms p99={p99:.1}ms max={max:.1}ms"
+                    "  query timing (last {len}): p50={p50:.1}ms p95={p95:.1}ms p99={p99:.1}ms max={max:.1}ms"
                 );
+            }
+            for (label, timings) in [
+                ("full refresh", &stats.recent_full_refresh_ms),
+                ("incremental", &stats.recent_incremental_refresh_ms),
+            ] {
+                if !timings.is_empty() {
+                    let mut sorted = timings.clone();
+                    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let len = sorted.len();
+                    let p50 = sorted[len / 2];
+                    let p95 = sorted[(len as f64 * 0.95) as usize];
+                    let p99 = sorted[((len as f64 * 0.99) as usize).min(len - 1)];
+                    let max = sorted[len - 1];
+                    eprintln!(
+                        "  {label} timing (last {len}): p50={p50:.1}ms p95={p95:.1}ms p99={p99:.1}ms max={max:.1}ms"
+                    );
+                }
             }
 
             Ok(())

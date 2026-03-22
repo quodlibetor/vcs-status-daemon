@@ -456,7 +456,7 @@ async fn handle_connection(
                             let mut st = state.lock().await;
                             if let Some((_, fresh)) = st.cache.get(&repo_path).cloned() {
                                 st.stats.cache_hits += 1;
-                                record_timing(&mut st.stats, query_start.elapsed());
+                                record_query_timing(&mut st.stats, query_start.elapsed());
                                 drop(st);
                                 if query_path != repo_path {
                                     link_cache_file(&cd, &repo_path, &query_path);
@@ -475,7 +475,7 @@ async fn handle_connection(
                 {
                     let mut st = state.lock().await;
                     st.stats.cache_hits += 1;
-                    record_timing(&mut st.stats, query_start.elapsed());
+                    record_query_timing(&mut st.stats, query_start.elapsed());
                 }
                 // Ensure the queried directory has a hardlink to the repo root's cache file
                 if query_path != repo_path {
@@ -531,7 +531,7 @@ async fn handle_connection(
                     {
                         let mut st = state.lock().await;
                         if let Some((_, formatted)) = st.cache.get(&repo_path).cloned() {
-                            record_timing(&mut st.stats, query_start.elapsed());
+                            record_query_timing(&mut st.stats, query_start.elapsed());
                             drop(st);
                             if query_path != repo_path {
                                 link_cache_file(&cd, &repo_path, &query_path);
@@ -662,12 +662,27 @@ fn link_cache_file(cache_dir: &Path, repo_root: &Path, query_dir: &Path) {
     }
 }
 
-fn record_timing(stats: &mut DaemonStats, elapsed: Duration) {
+fn record_query_timing(stats: &mut DaemonStats, elapsed: Duration) {
     let ms = elapsed.as_secs_f64() * 1000.0;
     if stats.recent_query_ms.len() >= TIMING_RING_SIZE {
         stats.recent_query_ms.remove(0);
     }
     stats.recent_query_ms.push(ms);
+}
+
+fn record_refresh_timing(stats: &mut DaemonStats, elapsed: Duration, incremental: bool) {
+    let ms = elapsed.as_secs_f64() * 1000.0;
+    let buf = if incremental {
+        stats.incremental_refreshes += 1;
+        &mut stats.recent_incremental_refresh_ms
+    } else {
+        stats.full_refreshes += 1;
+        &mut stats.recent_full_refresh_ms
+    };
+    if buf.len() >= TIMING_RING_SIZE {
+        buf.remove(0);
+    }
+    buf.push(ms);
 }
 
 /// Per-repo refresh state: tracks whether a re-refresh is needed while one is in flight.
@@ -717,7 +732,7 @@ async fn refresh_repo(
         (config, cd)
     };
 
-    let result = match vcs_kind {
+    let (result, was_incremental) = match vcs_kind {
         VcsKind::Jj if working_copy_changed && !changed_paths.is_empty() => {
             // Try incremental update via jj worker
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -727,17 +742,17 @@ async fn refresh_repo(
                 reply: reply_tx,
             });
             match reply_rx.await {
-                Ok(Ok(status)) => Ok(status),
+                Ok(Ok(status)) => (Ok(status), true),
                 Ok(Err(_)) => {
                     // No incremental state — fall back to full refresh
-                    jj_full_refresh(&repo_path, &config, &jj_worker).await
+                    (jj_full_refresh(&repo_path, &config, &jj_worker).await, false)
                 }
-                Err(_) => Err(anyhow::anyhow!("jj worker channel closed")),
+                Err(_) => (Err(anyhow::anyhow!("jj worker channel closed")), false),
             }
         }
         VcsKind::Jj => {
             // VCS-internal event or no paths — full refresh
-            jj_full_refresh(&repo_path, &config, &jj_worker).await
+            (jj_full_refresh(&repo_path, &config, &jj_worker).await, false)
         }
         VcsKind::Git if working_copy_changed && !changed_paths.is_empty() => {
             // Try incremental update via git worker
@@ -748,17 +763,17 @@ async fn refresh_repo(
                 reply: reply_tx,
             });
             match reply_rx.await {
-                Ok(Ok(status)) => Ok(status),
+                Ok(Ok(status)) => (Ok(status), true),
                 Ok(Err(_)) => {
                     // No incremental state — fall back to full refresh
-                    git_full_refresh(&repo_path, &git_worker).await
+                    (git_full_refresh(&repo_path, &git_worker).await, false)
                 }
-                Err(_) => Err(anyhow::anyhow!("git worker channel closed")),
+                Err(_) => (Err(anyhow::anyhow!("git worker channel closed")), false),
             }
         }
         VcsKind::Git => {
             // VCS-internal event or no paths — full refresh
-            git_full_refresh(&repo_path, &git_worker).await
+            (git_full_refresh(&repo_path, &git_worker).await, false)
         }
     };
 
@@ -769,8 +784,7 @@ async fn refresh_repo(
             write_cache_file(&cd, &repo_path, &formatted);
             st.refreshing.remove(&repo_path);
             st.update_cache(&repo_path, status, formatted);
-            st.stats.refreshes += 1;
-            record_timing(&mut st.stats, refresh_start.elapsed());
+            record_refresh_timing(&mut st.stats, refresh_start.elapsed(), was_incremental);
         }
         Err(e) => {
             tracing::error!(repo = %repo_path.display(), error = %e, "refresh failed");

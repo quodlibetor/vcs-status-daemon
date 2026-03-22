@@ -76,14 +76,20 @@ pub struct DaemonStats {
     pub cache_hits: u64,
     /// Cache misses (background populate)
     pub cache_misses: u64,
-    /// Total refresh cycles (watcher-triggered re-queries)
-    pub refreshes: u64,
+    /// Full refresh cycles (VCS-internal events like commit/reset)
+    pub full_refreshes: u64,
+    /// Incremental refresh cycles (working-copy file changes)
+    pub incremental_refreshes: u64,
     /// Total filesystem events received
     pub fs_events: u64,
     /// Filesystem events skipped because all paths were ignored
     pub fs_events_ignored: u64,
     /// Recent query durations in milliseconds (ring buffer, most recent last)
     pub recent_query_ms: Vec<f64>,
+    /// Recent full-refresh durations in milliseconds (ring buffer, most recent last)
+    pub recent_full_refresh_ms: Vec<f64>,
+    /// Recent incremental-refresh durations in milliseconds (ring buffer, most recent last)
+    pub recent_incremental_refresh_ms: Vec<f64>,
 }
 
 #[cfg(test)]
