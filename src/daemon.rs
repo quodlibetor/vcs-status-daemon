@@ -25,7 +25,6 @@ struct DaemonState {
     watchers: HashMap<PathBuf, RepoWatcher>,
     /// Maps arbitrary directories to their repo root and VCS kind. Negatives are not cached.
     dir_to_repo: HashMap<PathBuf, (PathBuf, VcsKind)>,
-    last_query: Instant,
     started_at: Instant,
     config: Config,
     cache_dir: PathBuf,
@@ -202,7 +201,6 @@ pub async fn run_daemon(
         cache: HashMap::new(),
         watchers: HashMap::new(),
         dir_to_repo: HashMap::new(),
-        last_query: Instant::now(),
         started_at: Instant::now(),
         config: config.clone(),
         cache_dir: cache_dir.clone(),
@@ -222,20 +220,11 @@ pub async fn run_daemon(
     // Spawn refresh task
     tokio::spawn(refresh_task(state.clone(), watch_rx));
 
-    // Spawn idle timeout task (also handles log rotation)
-    let state_idle = state.clone();
-    let shutdown_idle = shutdown.clone();
-    let idle_timeout_secs = config.idle_timeout_secs;
+    // Spawn log rotation task
     let log_dir = runtime_dir.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            let last = state_idle.lock().await.last_query;
-            if last.elapsed() > Duration::from_secs(idle_timeout_secs) {
-                tracing::info!("idle timeout, shutting down");
-                shutdown_idle.notify_one();
-                return;
-            }
             // Rotate log if it exceeds the size limit
             let log_path = log_dir.join("daemon.log");
             if let Ok(meta) = log_path.metadata()
@@ -450,7 +439,6 @@ async fn handle_connection(
             let query_start = Instant::now();
             let (repo_path, vcs_kind, cached, config, cd) = {
                 let mut st = state.lock().await;
-                st.last_query = Instant::now();
                 st.stats.queries += 1;
 
                 let resolved = if let Some(entry) = st.dir_to_repo.get(&query_path) {

@@ -28,7 +28,6 @@ Shell prompt calls:   vcs-status-daemon         (client mode, the default)
 - **Auto-start**: the client spawns the daemon automatically if it's not running
 - **Multi-repo**: the daemon tracks multiple repositories, each with its own filesystem watcher
 - **Dual VCS**: supports both jj and git repositories, with jj taking priority when both are present
-- **Idle shutdown**: the daemon exits automatically after 1 hour (configurable) with no queries
 
 ## Installation
 
@@ -195,9 +194,6 @@ The daemon also accepts a `--dir` CLI flag, which takes priority over the enviro
 Configuration is loaded from `~/.config/vcs-status-daemon/config.toml`. All fields are optional and have sensible defaults.
 
 ```toml
-# How long the daemon stays alive with no queries (seconds, default: 3600)
-idle_timeout_secs = 3600
-
 # How many ancestor commits to search for bookmarks in jj repos (default: 10)
 bookmark_search_depth = 10
 

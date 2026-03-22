@@ -8,8 +8,6 @@ use crate::protocol::VcsKind;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(default = "default_idle_timeout_secs")]
-    pub idle_timeout_secs: u64,
     /// Explicit format template. If set, overrides `template_name`.
     #[serde(default)]
     pub format: Option<String>,
@@ -32,9 +30,6 @@ pub struct Config {
     pub query_timeout_ms: u64,
 }
 
-fn default_idle_timeout_secs() -> u64 {
-    3600
-}
 fn default_template_name() -> String {
     "ascii".to_string()
 }
@@ -81,7 +76,6 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            idle_timeout_secs: default_idle_timeout_secs(),
             format: None,
             not_ready_format: None,
             template_name: default_template_name(),
@@ -191,9 +185,6 @@ pub fn config_init_path() -> Result<PathBuf> {
 
 pub const DEFAULT_CONFIG_TOML: &str = r##"# vcs-status-daemon configuration
 # See https://github.com/quodlibetor/vcs-status-daemon for full documentation.
-
-# How long (in seconds) the daemon stays alive without any queries.
-# idle_timeout_secs = 3600
 
 # How many ancestors of @ to search for bookmarks (jj only).
 # bookmark_search_depth = 10
@@ -311,7 +302,6 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.idle_timeout_secs, 3600);
         assert_eq!(config.bookmark_search_depth, 10);
         assert_eq!(config.template_name, "ascii");
         assert!(config.format.is_none());
@@ -375,12 +365,10 @@ template_name = "nonexistent"
     #[test]
     fn test_config_from_toml() {
         let toml_str = r#"
-idle_timeout_secs = 7200
 format = "{{ change_id }}"
 bookmark_search_depth = 5
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.idle_timeout_secs, 7200);
         assert_eq!(config.format, Some("{{ change_id }}".to_string()));
         assert_eq!(config.bookmark_search_depth, 5);
     }
@@ -388,7 +376,7 @@ bookmark_search_depth = 5
     #[test]
     fn test_load_config_missing_file() {
         let config = load_config_from(Some(Path::new("/tmp/nonexistent-vsd-config.toml"))).unwrap();
-        assert_eq!(config.idle_timeout_secs, 3600);
+        assert_eq!(config.bookmark_search_depth, 10);
     }
 
     #[test]
@@ -448,15 +436,15 @@ bookmark_search_depth = 5
 
         crate::run_config(
             crate::ConfigAction::Set {
-                key: "idle_timeout_secs".into(),
-                value: "500".into(),
+                key: "bookmark_search_depth".into(),
+                value: "20".into(),
             },
             Some(&cf),
         )
         .unwrap();
 
         let config = load_config_from(Some(&cf)).unwrap();
-        assert_eq!(config.idle_timeout_secs, 500);
+        assert_eq!(config.bookmark_search_depth, 20);
     }
 
     #[test]
@@ -588,7 +576,7 @@ bookmark_search_depth = 5
 
         let result = crate::run_config(
             crate::ConfigAction::Set {
-                key: "idle_timeout_secs".into(),
+                key: "bookmark_search_depth".into(),
                 value: "notanumber".into(),
             },
             Some(&cf),
@@ -596,7 +584,7 @@ bookmark_search_depth = 5
         assert!(result.is_err(), "config set should reject wrong types");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("idle_timeout_secs"),
+            err.contains("bookmark_search_depth"),
             "error should mention the key: {err}"
         );
     }

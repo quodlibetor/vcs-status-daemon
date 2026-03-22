@@ -146,14 +146,14 @@ pub(crate) enum ConfigAction {
     Path,
     /// Set a config value (e.g. `config set template_name nerdfont`)
     Set {
-        /// Config key (e.g. "template_name", "idle_timeout_secs")
+        /// Config key (e.g. "template_name", "bookmark_search_depth")
         key: String,
         /// Value to set (strings, numbers, and booleans are auto-detected)
         value: String,
     },
     /// Get a config value
     Get {
-        /// Config key (e.g. "template_name", "idle_timeout_secs")
+        /// Config key (e.g. "template_name", "bookmark_search_depth")
         key: String,
     },
 }
@@ -351,7 +351,7 @@ pub(crate) fn run_config(action: ConfigAction, config_file: Option<&Path>) -> an
         ConfigAction::Get { key } => {
             let cfg = config::load_config_from(config_file)?;
             let val = match key.as_str() {
-                "idle_timeout_secs" => cfg.idle_timeout_secs.to_string(),
+                "idle_timeout_secs" => anyhow::bail!("idle_timeout_secs has been removed"),
                 "debounce_ms" => anyhow::bail!("debounce_ms has been removed"),
                 "format" => cfg.format.unwrap_or_default(),
                 "not_ready_format" => cfg.not_ready_format.unwrap_or_default(),
