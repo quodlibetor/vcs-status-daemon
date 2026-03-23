@@ -115,23 +115,31 @@ format = "$env_value "
 
 ### Themes
 
-The exact output is configured via [tera templates](https://keats.github.io/tera/docs/#templates).
+The exact output is configured via [tera](https://keats.github.io/tera/docs/#templates) templates.
+
+Built in templates are defined in [src/templates](./src/templates), you can use them as inspiration
+and define new ones in your config file via `vcs-status-daemon config edit`.
 
 You can set any named template with `vcs-status-daemon config set template_name NAME`.
 
 There are several built-in templates that you can view with the
 `vcs-status-daemon template list` command:
 
-`vcs-status-daemon` detailed templates which include line counts in addition to
-file counts:
+#### vcs-status-daemin detailed templates
+
+These include line counts in addition to file counts:
+
 <img alt="detailed templates" src="static/templates-detailed.png" width="400" />
 
-`vcs-status-daemon` simple templates which just use color and minimal symbols
-to represent the status:
+#### `vcs-status-daemon` simple templates
+
+These just use color and minimal symbols to represent the status:
 
 <img alt="simple templates" src="./static/templates-simple.png" width="400" />
 
-Clones of templates from [gitstatus](https://github.com/romkatv/gitstatus),
+#### Clones of popular git prompts
+
+Clones of templates from [gitstatus / p10k](https://github.com/romkatv/gitstatus),
 [starship](https://starship.rs/),
 [oh-my-zsh](https://github.com/ohmyzsh/ohmyzsh/blob/master/plugins/git-prompt/README.md),
 and [pure](https://github.com/factcondenser/pure-prompt):
