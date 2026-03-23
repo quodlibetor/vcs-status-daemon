@@ -86,7 +86,7 @@ pub struct FileDiffStats {
 /// Aggregated diff statistics including per-category file counts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DiffCounts {
-    pub files_changed: u32,
+    pub file_mad_count: u32,
     pub lines_added: u32,
     pub lines_removed: u32,
     pub files_modified: u32,
@@ -131,7 +131,7 @@ pub fn aggregate_overlay_stats(
             return;
         }
         if stats.lines_added > 0 || stats.lines_removed > 0 {
-            counts.files_changed += 1;
+            counts.file_mad_count += 1;
             counts.lines_added += stats.lines_added;
             counts.lines_removed += stats.lines_removed;
             match stats.kind {
@@ -176,19 +176,19 @@ impl JjRepoState {
     fn current_status(&self) -> RepoStatus {
         let c = self.aggregate_stats();
         RepoStatus {
-            files_changed: c.files_changed,
-            lines_added: c.lines_added,
-            lines_removed: c.lines_removed,
-            files_modified: c.files_modified,
-            files_added: c.files_added,
-            files_deleted: c.files_deleted,
-            total_files_changed: c.files_changed,
-            total_lines_added: c.lines_added,
-            total_lines_removed: c.lines_removed,
-            total_files_modified: c.files_modified,
-            total_files_added: c.files_added,
-            total_files_deleted: c.files_deleted,
-            empty: c.files_changed == 0 && self.base_status.empty && self.overlay.is_empty(),
+            file_mad_count_working_tree: c.file_mad_count,
+            lines_added_working_tree: c.lines_added,
+            lines_removed_working_tree: c.lines_removed,
+            files_modified_working_tree: c.files_modified,
+            files_added_working_tree: c.files_added,
+            files_deleted_working_tree: c.files_deleted,
+            file_mad_count: c.file_mad_count,
+            lines_added_total: c.lines_added,
+            lines_removed_total: c.lines_removed,
+            files_modified_total: c.files_modified,
+            files_added_total: c.files_added,
+            files_deleted_total: c.files_deleted,
+            empty: c.file_mad_count == 0 && self.base_status.empty && self.overlay.is_empty(),
             ..self.base_status.clone()
         }
     }
@@ -496,7 +496,7 @@ fn classify_tracking(
     match (local_is_ancestor, remote_is_ancestor) {
         (true, false) => TrackingStatus::Behind, // local is ancestor of remote
         (false, true) => TrackingStatus::Ahead,  // remote is ancestor of local
-        _ => TrackingStatus::Diverged,
+        _ => TrackingStatus::Sideways,
     }
 }
 
@@ -527,11 +527,11 @@ fn compute_tracking_statuses(
             .and_modify(|existing| {
                 // Keep the "worst" status
                 match (&existing, &status) {
-                    (TrackingStatus::Diverged, _) => {}
-                    (_, TrackingStatus::Diverged) => *existing = TrackingStatus::Diverged,
+                    (TrackingStatus::Sideways, _) => {}
+                    (_, TrackingStatus::Sideways) => *existing = TrackingStatus::Sideways,
                     (TrackingStatus::Ahead, TrackingStatus::Behind)
                     | (TrackingStatus::Behind, TrackingStatus::Ahead) => {
-                        *existing = TrackingStatus::Diverged
+                        *existing = TrackingStatus::Sideways
                     }
                     (TrackingStatus::Tracked, _) => *existing = status.clone(),
                     _ => {}
@@ -729,19 +729,19 @@ async fn query_jj_lib(repo_path: &Path, depth: u32) -> Result<(RepoStatus, JjRep
     let base_file_stats = if let Some(ref parent_tree) = parent_tree {
         let per_file = compute_per_file_diff_stats(repo.store(), parent_tree, &current_tree).await;
         let c = aggregate_file_stats(&per_file);
-        status.files_changed = c.files_changed;
-        status.lines_added = c.lines_added;
-        status.lines_removed = c.lines_removed;
-        status.files_modified = c.files_modified;
-        status.files_added = c.files_added;
-        status.files_deleted = c.files_deleted;
-        status.total_files_changed = c.files_changed;
-        status.total_lines_added = c.lines_added;
-        status.total_lines_removed = c.lines_removed;
-        status.total_files_modified = c.files_modified;
-        status.total_files_added = c.files_added;
-        status.total_files_deleted = c.files_deleted;
-        status.empty = c.files_changed == 0;
+        status.file_mad_count_working_tree = c.file_mad_count;
+        status.lines_added_working_tree = c.lines_added;
+        status.lines_removed_working_tree = c.lines_removed;
+        status.files_modified_working_tree = c.files_modified;
+        status.files_added_working_tree = c.files_added;
+        status.files_deleted_working_tree = c.files_deleted;
+        status.file_mad_count = c.file_mad_count;
+        status.lines_added_total = c.lines_added;
+        status.lines_removed_total = c.lines_removed;
+        status.files_modified_total = c.files_modified;
+        status.files_added_total = c.files_added;
+        status.files_deleted_total = c.files_deleted;
+        status.empty = c.file_mad_count == 0;
         per_file
     } else {
         status.empty = true;
@@ -1029,13 +1029,16 @@ mod tests {
             ..Default::default()
         };
         let status = query_jj_status(dir.path(), &config).await.unwrap();
-        assert!(status.files_changed >= 1);
-        assert!(status.lines_added > 0);
+        assert!(status.file_mad_count_working_tree >= 1);
+        assert!(status.lines_added_working_tree > 0);
         // For jj, total should equal unstaged (no staging area)
-        assert_eq!(status.total_files_changed, status.files_changed);
-        assert_eq!(status.total_lines_added, status.lines_added);
-        assert_eq!(status.total_lines_removed, status.lines_removed);
-        assert_eq!(status.staged_files_changed, 0);
+        assert_eq!(status.file_mad_count, status.file_mad_count_working_tree);
+        assert_eq!(status.lines_added_total, status.lines_added_working_tree);
+        assert_eq!(
+            status.lines_removed_total,
+            status.lines_removed_working_tree
+        );
+        assert_eq!(status.file_mad_count_staged, 0);
     }
 
     /// Parse the summary line from `diff --stat` output.
@@ -1133,15 +1136,15 @@ mod tests {
 
         assert_eq!(
             (
-                status.files_changed,
-                status.lines_added,
-                status.lines_removed
+                status.file_mad_count_working_tree,
+                status.lines_added_working_tree,
+                status.lines_removed_working_tree
             ),
             (cli_files, cli_added, cli_removed),
             "our stats ({}f, +{}, -{}) != jj diff --stat ({}f, +{}, -{})\njj output:\n{}",
-            status.files_changed,
-            status.lines_added,
-            status.lines_removed,
+            status.file_mad_count_working_tree,
+            status.lines_added_working_tree,
+            status.lines_removed_working_tree,
             cli_files,
             cli_added,
             cli_removed,
@@ -1196,15 +1199,15 @@ mod tests {
 
         assert_eq!(
             (
-                status.files_changed,
-                status.lines_added,
-                status.lines_removed
+                status.file_mad_count_working_tree,
+                status.lines_added_working_tree,
+                status.lines_removed_working_tree
             ),
             (cli_files, cli_added, cli_removed),
             "our stats ({}f, +{}, -{}) != jj diff --stat ({}f, +{}, -{})\njj output:\n{}",
-            status.files_changed,
-            status.lines_added,
-            status.lines_removed,
+            status.file_mad_count_working_tree,
+            status.lines_added_working_tree,
+            status.lines_removed_working_tree,
             cli_files,
             cli_added,
             cli_removed,
@@ -1274,15 +1277,15 @@ mod tests {
 
         assert_eq!(
             (
-                status.files_changed,
-                status.lines_added,
-                status.lines_removed
+                status.file_mad_count_working_tree,
+                status.lines_added_working_tree,
+                status.lines_removed_working_tree
             ),
             (cli_files, cli_added, cli_removed),
             "our stats ({}f, +{}, -{}) != jj diff --stat ({}f, +{}, -{})\njj output:\n{}",
-            status.files_changed,
-            status.lines_added,
-            status.lines_removed,
+            status.file_mad_count_working_tree,
+            status.lines_added_working_tree,
+            status.lines_removed_working_tree,
             cli_files,
             cli_added,
             cli_removed,
@@ -1312,7 +1315,7 @@ mod tests {
             .unwrap();
         let status = reply_rx.await.unwrap().unwrap();
         assert!(status.empty, "should be empty initially");
-        assert_eq!(status.files_changed, 0);
+        assert_eq!(status.file_mad_count_working_tree, 0);
 
         // Write a file to working copy WITHOUT running jj (no snapshot)
         std::fs::write(dir.path().join("hello.txt"), "line1\nline2\nline3\n").unwrap();
@@ -1328,9 +1331,15 @@ mod tests {
             })
             .unwrap();
         let status = reply_rx.await.unwrap().unwrap();
-        assert_eq!(status.files_changed, 1, "should see 1 file changed");
-        assert_eq!(status.lines_added, 3, "should see 3 lines added");
-        assert_eq!(status.lines_removed, 0);
+        assert_eq!(
+            status.file_mad_count_working_tree, 1,
+            "should see 1 file changed"
+        );
+        assert_eq!(
+            status.lines_added_working_tree, 3,
+            "should see 3 lines added"
+        );
+        assert_eq!(status.lines_removed_working_tree, 0);
         assert!(!status.empty, "should not be empty after file write");
     }
 
@@ -1359,8 +1368,8 @@ mod tests {
             })
             .unwrap();
         let status = reply_rx.await.unwrap().unwrap();
-        assert_eq!(status.files_changed, 1);
-        assert_eq!(status.lines_added, 3);
+        assert_eq!(status.file_mad_count_working_tree, 1);
+        assert_eq!(status.lines_added_working_tree, 3);
 
         // Modify the file on disk without snapshot — add a line
         std::fs::write(dir.path().join("data.txt"), "aaa\nbbb\nccc\nddd\n").unwrap();
@@ -1375,12 +1384,12 @@ mod tests {
             })
             .unwrap();
         let status = reply_rx.await.unwrap().unwrap();
-        assert_eq!(status.files_changed, 1);
+        assert_eq!(status.file_mad_count_working_tree, 1);
         assert_eq!(
-            status.lines_added, 4,
+            status.lines_added_working_tree, 4,
             "should see 4 lines added (vs parent)"
         );
-        assert_eq!(status.lines_removed, 0);
+        assert_eq!(status.lines_removed_working_tree, 0);
     }
 
     /// Test incremental diff: delete a file that existed in parent.
@@ -1421,21 +1430,27 @@ mod tests {
             })
             .unwrap();
         let status = reply_rx.await.unwrap().unwrap();
-        assert_eq!(status.files_changed, 1, "should see 1 deleted file");
-        assert_eq!(status.lines_removed, 3, "should see 3 lines removed");
-        assert_eq!(status.lines_added, 0);
+        assert_eq!(
+            status.file_mad_count_working_tree, 1,
+            "should see 1 deleted file"
+        );
+        assert_eq!(
+            status.lines_removed_working_tree, 3,
+            "should see 3 lines removed"
+        );
+        assert_eq!(status.lines_added_working_tree, 0);
     }
 
     // --- Pure unit tests for overlay aggregation (no jj repo needed) ---
 
-    /// Helper to build DiffCounts with just (files_changed, lines_added, lines_removed).
-    /// files_changed are all counted as modified.
-    fn dcounts(files_changed: u32, lines_added: u32, lines_removed: u32) -> DiffCounts {
+    /// Helper to build DiffCounts with just (file_mad_count, lines_added, lines_removed).
+    /// file_mad_count are all counted as modified.
+    fn dcounts(file_mad_count: u32, lines_added: u32, lines_removed: u32) -> DiffCounts {
         DiffCounts {
-            files_changed,
+            file_mad_count,
             lines_added,
             lines_removed,
-            files_modified: files_changed,
+            files_modified: file_mad_count,
             ..Default::default()
         }
     }

@@ -3,19 +3,21 @@
     Intentionally minimal: no counts, no breakdown.
 -#}
 {% if is_jj -%}
-  {%- set dirty = total_files_changed > 0 -%}
+  {%- set dirty = file_mad_count > 0 -%}
   {%- if bookmarks and bookmarks[0].distance == 0 -%}
     {{ bookmarks[0].name | bright_black }}
     {%- if bookmarks[0].tracking == "ahead" %}{{ "⇡" | cyan }}
     {%- elif bookmarks[0].tracking == "behind" %}{{ "⇣" | cyan }}
-    {%- elif bookmarks[0].tracking == "diverged" %}{{ "⇕" | red }}
+    {%- elif bookmarks[0].tracking == "sideways" %}{{ "⇕" | red }}
     {%- endif %}
+  {%- elif bookmarks and bookmarks[0].tracking == "sideways" -%}
+    {{ bookmarks[0].display | bright_black }}{{ "⇕" | red }}
   {%- else -%}
     {{ change_id_prefix | bright_black }}{{ change_id_rest | bright_black }}
   {%- endif -%}
   {%- if dirty %}{{ "*" | magenta }}{% endif -%}
 {%- elif is_git -%}
-  {%- set dirty = files_changed > 0 or staged_files_changed > 0 or untracked > 0 -%}
+  {%- set dirty = file_mad_count_working_tree > 0 or file_mad_count_staged > 0 or untracked > 0 -%}
   {%- if has_branch -%}
     {{ branch | bright_black }}
   {%- else -%}
@@ -30,4 +32,5 @@
 {% if conflict %} {{ "✖" | red }}{% endif -%}
 {% if divergent %} {{ "divergent" | red }}{% endif -%}
 {% if hidden %} {{ "hidden" | yellow }}{% endif -%}
-{% if not is_default_workspace %} {{ workspace_name | cyan }}{% endif %}
+{% if not is_default_workspace %} {{ workspace_name | cyan }}{% endif -%}
+{% if is_stale %} {{ "!" | yellow }}{% endif %}

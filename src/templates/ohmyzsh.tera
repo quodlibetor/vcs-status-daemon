@@ -9,16 +9,16 @@
   {%- for b in bookmarks %} {{ b.display | bold | magenta }}
     {%- if b.tracking == "ahead" %}{{ "↑" }}
     {%- elif b.tracking == "behind" %}{{ "↓" }}
-    {%- elif b.tracking == "diverged" %}{{ "↕" | red }}
+    {%- elif b.tracking == "sideways" %}{{ "↕" | red }}
     {%- endif %}
   {%- endfor %}
-  {%- if total_files_changed > 0 or conflict -%}
+  {%- if file_mad_count > 0 or conflict -%}
     {{ "|" | bright_black }}
     {%- set need_space = false -%}
     {%- if conflict %}{{ "✖" | red }}{% set need_space = true %}{% endif -%}
-    {%- if total_files_modified > 0 %}{% if need_space %} {% endif %}{{ "✚" ~ total_files_modified | blue }}{% set need_space = true %}{% endif -%}
-    {%- if total_files_added > 0 %}{% if need_space %} {% endif %}{{ "+" ~ total_files_added | blue }}{% set need_space = true %}{% endif -%}
-    {%- if total_files_deleted > 0 %}{% if need_space %} {% endif %}{{ "–" ~ total_files_deleted | blue }}{% set need_space = true %}{% endif -%}
+    {%- if files_modified_total > 0 %}{% if need_space %} {% endif %}{{ "✚" ~ files_modified_total | blue }}{% set need_space = true %}{% endif -%}
+    {%- if files_added_total > 0 %}{% if need_space %} {% endif %}{{ "+" ~ files_added_total | blue }}{% set need_space = true %}{% endif -%}
+    {%- if files_deleted_total > 0 %}{% if need_space %} {% endif %}{{ "–" ~ files_deleted_total | blue }}{% set need_space = true %}{% endif -%}
   {%- else -%}
     {{ "|" | bright_black }}{{ "✔" | bold | green }}
   {%- endif -%}
@@ -30,15 +30,15 @@
   {%- else -%}
     {{ commit_id | bold | magenta }}
   {%- endif -%}
-  {%- set any_status = staged_files_changed > 0 or files_changed > 0 or untracked > 0 or conflict or ahead > 0 or behind > 0 or stashes > 0 -%}
+  {%- set any_status = file_mad_count_staged > 0 or file_mad_count_working_tree > 0 or untracked > 0 or conflict or ahead > 0 or behind > 0 or stashes > 0 -%}
   {%- if any_status -%}
     {{ "|" | bright_black }}
     {%- set need_space = false -%}
-    {%- if staged_files_changed > 0 %}{{ "●" ~ staged_files_changed | red }}{% set need_space = true %}{% endif -%}
+    {%- if file_mad_count_staged > 0 %}{{ "●" ~ file_mad_count_staged | red }}{% set need_space = true %}{% endif -%}
     {%- if conflict %}{% if need_space %} {% endif %}{{ "✖" | red }}{% set need_space = true %}{% endif -%}
-    {%- if files_modified > 0 %}{% if need_space %} {% endif %}{{ "✚" ~ files_modified | blue }}{% set need_space = true %}{% endif -%}
-    {%- if files_added > 0 %}{% if need_space %} {% endif %}{{ "+" ~ files_added | blue }}{% set need_space = true %}{% endif -%}
-    {%- if files_deleted > 0 %}{% if need_space %} {% endif %}{{ "–" ~ files_deleted | blue }}{% set need_space = true %}{% endif -%}
+    {%- if files_modified_working_tree > 0 %}{% if need_space %} {% endif %}{{ "✚" ~ files_modified_working_tree | blue }}{% set need_space = true %}{% endif -%}
+    {%- if files_added_working_tree > 0 %}{% if need_space %} {% endif %}{{ "+" ~ files_added_working_tree | blue }}{% set need_space = true %}{% endif -%}
+    {%- if files_deleted_working_tree > 0 %}{% if need_space %} {% endif %}{{ "–" ~ files_deleted_working_tree | blue }}{% set need_space = true %}{% endif -%}
     {%- if untracked > 0 %}{% if need_space %} {% endif %}{{ "…" | cyan }}{% set need_space = true %}{% endif -%}
     {%- if behind > 0 %}{% if need_space %} {% endif %}{{ "↓" ~ behind }}{% set need_space = true %}{% endif -%}
     {%- if ahead > 0 %}{% if need_space %} {% endif %}{{ "↑" ~ ahead }}{% set need_space = true %}{% endif -%}
@@ -51,4 +51,5 @@
 {% if rebasing %} {{ "rebase" | yellow }}{% endif -%}
 {% if divergent %} {{ "DIVERGENT" | red }}{% endif -%}
 {% if hidden %} {{ "HIDDEN" | yellow }}{% endif -%}
-{% if not is_default_workspace %} {{ workspace_name | green }}{% endif %}
+{% if not is_default_workspace %} {{ workspace_name | green }}{% endif -%}
+{% if is_stale %} {{ "!" | yellow }}{% endif %}

@@ -16,7 +16,7 @@ const GIT2_TIMEOUT: Duration = Duration::from_secs(30);
 fn diff_stats(diff: &git2::Diff<'_>) -> Result<DiffCounts> {
     let stats = diff.stats()?;
     let mut counts = DiffCounts {
-        files_changed: stats.files_changed() as u32,
+        file_mad_count: stats.files_changed() as u32,
         lines_added: stats.insertions() as u32,
         lines_removed: stats.deletions() as u32,
         ..Default::default()
@@ -116,18 +116,18 @@ impl GitRepoState {
         let us = aggregate_overlay_stats(&self.base_unstaged, &self.unstaged_overlay);
         let tot = aggregate_overlay_stats(&self.base_total, &self.total_overlay);
         RepoStatus {
-            files_changed: us.files_changed,
-            lines_added: us.lines_added,
-            lines_removed: us.lines_removed,
-            files_modified: us.files_modified,
-            files_added: us.files_added,
-            files_deleted: us.files_deleted,
-            total_files_changed: tot.files_changed,
-            total_lines_added: tot.lines_added,
-            total_lines_removed: tot.lines_removed,
-            total_files_modified: tot.files_modified,
-            total_files_added: tot.files_added,
-            total_files_deleted: tot.files_deleted,
+            file_mad_count_working_tree: us.file_mad_count,
+            lines_added_working_tree: us.lines_added,
+            lines_removed_working_tree: us.lines_removed,
+            files_modified_working_tree: us.files_modified,
+            files_added_working_tree: us.files_added,
+            files_deleted_working_tree: us.files_deleted,
+            file_mad_count: tot.file_mad_count,
+            lines_added_total: tot.lines_added,
+            lines_removed_total: tot.lines_removed,
+            files_modified_total: tot.files_modified,
+            files_added_total: tot.files_added,
+            files_deleted_total: tot.files_deleted,
             untracked: tot.files_untracked,
             // Staged stats are unchanged by working copy edits
             ..self.base_status.clone()
@@ -288,12 +288,12 @@ fn query_git_status_blocking_with_state(repo_path: &Path) -> Result<(RepoStatus,
             if let Ok(diff) = repo.diff_index_to_workdir(None, Some(&mut diff_opts)) {
                 let per_file = per_file_stats_from_diff(&diff).unwrap_or_default();
                 let c = aggregate_file_stats(&per_file);
-                status.files_changed = c.files_changed;
-                status.lines_added = c.lines_added;
-                status.lines_removed = c.lines_removed;
-                status.files_modified = c.files_modified;
-                status.files_added = c.files_added;
-                status.files_deleted = c.files_deleted;
+                status.file_mad_count_working_tree = c.file_mad_count;
+                status.lines_added_working_tree = c.lines_added;
+                status.lines_removed_working_tree = c.lines_removed;
+                status.files_modified_working_tree = c.files_modified;
+                status.files_added_working_tree = c.files_added;
+                status.files_deleted_working_tree = c.files_deleted;
                 per_file
             } else {
                 HashMap::new()
@@ -306,12 +306,12 @@ fn query_git_status_blocking_with_state(repo_path: &Path) -> Result<(RepoStatus,
             if let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), None, None)
                 && let Ok(c) = diff_stats(&diff)
             {
-                status.staged_files_changed = c.files_changed;
-                status.staged_lines_added = c.lines_added;
-                status.staged_lines_removed = c.lines_removed;
-                status.staged_files_modified = c.files_modified;
-                status.staged_files_added = c.files_added;
-                status.staged_files_deleted = c.files_deleted;
+                status.file_mad_count_staged = c.file_mad_count;
+                status.lines_added_staged = c.lines_added;
+                status.lines_removed_staged = c.lines_removed;
+                status.files_modified_staged = c.files_modified;
+                status.files_added_staged = c.files_added;
+                status.files_deleted_staged = c.files_deleted;
             }
         }
 
@@ -325,12 +325,12 @@ fn query_git_status_blocking_with_state(repo_path: &Path) -> Result<(RepoStatus,
             {
                 let per_file = per_file_stats_from_diff(&diff).unwrap_or_default();
                 let c = aggregate_file_stats(&per_file);
-                status.total_files_changed = c.files_changed;
-                status.total_lines_added = c.lines_added;
-                status.total_lines_removed = c.lines_removed;
-                status.total_files_modified = c.files_modified;
-                status.total_files_added = c.files_added;
-                status.total_files_deleted = c.files_deleted;
+                status.file_mad_count = c.file_mad_count;
+                status.lines_added_total = c.lines_added;
+                status.lines_removed_total = c.lines_removed;
+                status.files_modified_total = c.files_modified;
+                status.files_added_total = c.files_added;
+                status.files_deleted_total = c.files_deleted;
                 status.untracked = c.files_untracked;
                 per_file
             } else {
@@ -559,20 +559,20 @@ mod tests {
         let status = query_git_status(dir.path(), &config).await.unwrap();
         // Unstaged: working tree vs index — should show the change
         assert!(
-            status.files_changed >= 1,
-            "expected unstaged files_changed >= 1, got {}",
-            status.files_changed
+            status.file_mad_count_working_tree >= 1,
+            "expected unstaged file_mad_count_working_tree >= 1, got {}",
+            status.file_mad_count_working_tree
         );
         assert!(
-            status.lines_added > 0,
-            "expected unstaged lines_added > 0, got {}",
-            status.lines_added
+            status.lines_added_working_tree > 0,
+            "expected unstaged lines_added_working_tree > 0, got {}",
+            status.lines_added_working_tree
         );
         // Staged: nothing staged
-        assert_eq!(status.staged_files_changed, 0);
+        assert_eq!(status.file_mad_count_staged, 0);
         // Total: same as unstaged since nothing is staged
-        assert_eq!(status.total_files_changed, status.files_changed);
-        assert_eq!(status.total_lines_added, status.lines_added);
+        assert_eq!(status.file_mad_count, status.file_mad_count_working_tree);
+        assert_eq!(status.lines_added_total, status.lines_added_working_tree);
     }
 
     #[tokio::test]
@@ -587,9 +587,9 @@ mod tests {
         let status = query_git_status(dir.path(), &config).await.unwrap();
         assert_eq!(status.untracked, 1, "expected 1 untracked file");
         // Untracked files should not count as files_changed or affect line stats
-        assert_eq!(status.total_files_changed, 0);
-        assert_eq!(status.total_lines_added, 0);
-        assert_eq!(status.total_lines_removed, 0);
+        assert_eq!(status.file_mad_count, 0);
+        assert_eq!(status.lines_added_total, 0);
+        assert_eq!(status.lines_removed_total, 0);
     }
 
     #[tokio::test]
@@ -605,23 +605,23 @@ mod tests {
         let status = query_git_status(dir.path(), &config).await.unwrap();
         // Unstaged: nothing unstaged (change is in index)
         assert_eq!(
-            status.files_changed, 0,
-            "expected no unstaged changes, got files_changed={}",
-            status.files_changed
+            status.file_mad_count_working_tree, 0,
+            "expected no unstaged changes, got file_mad_count_working_tree={}",
+            status.file_mad_count_working_tree
         );
         // Staged: should show the change
         assert!(
-            status.staged_files_changed >= 1,
-            "expected staged_files_changed >= 1, got {}",
-            status.staged_files_changed
+            status.file_mad_count_staged >= 1,
+            "expected file_mad_count_staged >= 1, got {}",
+            status.file_mad_count_staged
         );
         assert!(
-            status.staged_lines_added > 0,
-            "expected staged_lines_added > 0, got {}",
-            status.staged_lines_added
+            status.lines_added_staged > 0,
+            "expected lines_added_staged > 0, got {}",
+            status.lines_added_staged
         );
         // Total: same as staged
-        assert_eq!(status.total_files_changed, status.staged_files_changed);
+        assert_eq!(status.file_mad_count, status.file_mad_count_staged);
     }
 
     #[tokio::test]
@@ -638,26 +638,26 @@ mod tests {
         };
         let status = query_git_status(dir.path(), &config).await.unwrap();
         assert!(
-            status.files_changed >= 1,
-            "expected unstaged files_changed >= 1, got {}",
-            status.files_changed
+            status.file_mad_count_working_tree >= 1,
+            "expected unstaged file_mad_count_working_tree >= 1, got {}",
+            status.file_mad_count_working_tree
         );
         assert!(
-            status.staged_files_changed >= 1,
-            "expected staged_files_changed >= 1, got {}",
-            status.staged_files_changed
+            status.file_mad_count_staged >= 1,
+            "expected file_mad_count_staged >= 1, got {}",
+            status.file_mad_count_staged
         );
         assert!(
-            status.total_files_changed >= 1,
-            "expected total_files_changed >= 1, got {}",
-            status.total_files_changed
+            status.file_mad_count >= 1,
+            "expected file_mad_count >= 1, got {}",
+            status.file_mad_count
         );
         // Total lines should be >= staged + unstaged (though file counts may not add)
         assert!(
-            status.total_lines_added >= status.staged_lines_added,
-            "total_lines_added ({}) should be >= staged_lines_added ({})",
-            status.total_lines_added,
-            status.staged_lines_added
+            status.lines_added_total >= status.lines_added_staged,
+            "lines_added_total ({}) should be >= lines_added_staged ({})",
+            status.lines_added_total,
+            status.lines_added_staged
         );
     }
 
@@ -884,15 +884,15 @@ mod tests {
 
         assert_eq!(
             (
-                status.total_files_changed,
-                status.total_lines_added,
-                status.total_lines_removed
+                status.file_mad_count,
+                status.lines_added_total,
+                status.lines_removed_total
             ),
             (cli_total_f, cli_total_a, cli_total_r),
             "total stats ({}f, +{}, -{}) != git diff --stat HEAD ({}f, +{}, -{})\ngit output:\n{}",
-            status.total_files_changed,
-            status.total_lines_added,
-            status.total_lines_removed,
+            status.file_mad_count,
+            status.lines_added_total,
+            status.lines_removed_total,
             cli_total_f,
             cli_total_a,
             cli_total_r,
@@ -905,15 +905,15 @@ mod tests {
 
         assert_eq!(
             (
-                status.files_changed,
-                status.lines_added,
-                status.lines_removed
+                status.file_mad_count_working_tree,
+                status.lines_added_working_tree,
+                status.lines_removed_working_tree
             ),
             (cli_us_f, cli_us_a, cli_us_r),
             "unstaged stats ({}f, +{}, -{}) != git diff --stat ({}f, +{}, -{})\ngit output:\n{}",
-            status.files_changed,
-            status.lines_added,
-            status.lines_removed,
+            status.file_mad_count_working_tree,
+            status.lines_added_working_tree,
+            status.lines_removed_working_tree,
             cli_us_f,
             cli_us_a,
             cli_us_r,
@@ -977,15 +977,15 @@ mod tests {
         let (cli_us_f, cli_us_a, cli_us_r) = parse_diff_stat_summary(&git_unstaged);
         assert_eq!(
             (
-                status.files_changed,
-                status.lines_added,
-                status.lines_removed
+                status.file_mad_count_working_tree,
+                status.lines_added_working_tree,
+                status.lines_removed_working_tree
             ),
             (cli_us_f, cli_us_a, cli_us_r),
             "unstaged ({}f, +{}, -{}) != git diff --stat ({}f, +{}, -{})\n{}",
-            status.files_changed,
-            status.lines_added,
-            status.lines_removed,
+            status.file_mad_count_working_tree,
+            status.lines_added_working_tree,
+            status.lines_removed_working_tree,
             cli_us_f,
             cli_us_a,
             cli_us_r,
@@ -997,15 +997,15 @@ mod tests {
         let (cli_st_f, cli_st_a, cli_st_r) = parse_diff_stat_summary(&git_staged);
         assert_eq!(
             (
-                status.staged_files_changed,
-                status.staged_lines_added,
-                status.staged_lines_removed
+                status.file_mad_count_staged,
+                status.lines_added_staged,
+                status.lines_removed_staged
             ),
             (cli_st_f, cli_st_a, cli_st_r),
             "staged ({}f, +{}, -{}) != git diff --cached --stat ({}f, +{}, -{})\n{}",
-            status.staged_files_changed,
-            status.staged_lines_added,
-            status.staged_lines_removed,
+            status.file_mad_count_staged,
+            status.lines_added_staged,
+            status.lines_removed_staged,
             cli_st_f,
             cli_st_a,
             cli_st_r,
@@ -1017,15 +1017,15 @@ mod tests {
         let (cli_tot_f, cli_tot_a, cli_tot_r) = parse_diff_stat_summary(&git_total);
         assert_eq!(
             (
-                status.total_files_changed,
-                status.total_lines_added,
-                status.total_lines_removed
+                status.file_mad_count,
+                status.lines_added_total,
+                status.lines_removed_total
             ),
             (cli_tot_f, cli_tot_a, cli_tot_r),
             "total ({}f, +{}, -{}) != git diff --stat HEAD ({}f, +{}, -{})\n{}",
-            status.total_files_changed,
-            status.total_lines_added,
-            status.total_lines_removed,
+            status.file_mad_count,
+            status.lines_added_total,
+            status.lines_removed_total,
             cli_tot_f,
             cli_tot_a,
             cli_tot_r,
@@ -1068,8 +1068,8 @@ mod tests {
         let agg = aggregate_file_stats(&per_file);
         let ds = diff_stats(&diff).unwrap();
         assert_eq!(
-            (agg.files_changed, agg.lines_added, agg.lines_removed),
-            (ds.files_changed, ds.lines_added, ds.lines_removed)
+            (agg.file_mad_count, agg.lines_added, agg.lines_removed),
+            (ds.file_mad_count, ds.lines_added, ds.lines_removed)
         );
     }
 
@@ -1084,7 +1084,7 @@ mod tests {
 
         // Full refresh with no working copy changes
         let (base_status, mut state) = query_git_status_blocking_with_state(dir.path()).unwrap();
-        assert_eq!(base_status.total_files_changed, 0);
+        assert_eq!(base_status.file_mad_count, 0);
 
         // Modify the file
         std::fs::write(dir.path().join("src.txt"), "line1\nMODIFIED\nline3\nnew\n").unwrap();
@@ -1093,11 +1093,11 @@ mod tests {
         state.update_files(&[dir.path().join("src.txt")]);
         let updated = state.current_status();
 
-        assert_eq!(updated.total_files_changed, 1);
-        assert!(updated.total_lines_added > 0);
-        assert!(updated.total_lines_removed > 0);
+        assert_eq!(updated.file_mad_count, 1);
+        assert!(updated.lines_added_total > 0);
+        assert!(updated.lines_removed_total > 0);
         // Unstaged should also reflect the change
-        assert_eq!(updated.files_changed, 1);
+        assert_eq!(updated.file_mad_count_working_tree, 1);
     }
 
     #[tokio::test]
@@ -1111,7 +1111,7 @@ mod tests {
         // Base with staged new file
         let (base_status, mut state) = query_git_status_blocking_with_state(dir.path()).unwrap();
         assert!(
-            base_status.staged_files_changed >= 1,
+            base_status.file_mad_count_staged >= 1,
             "expected staged changes"
         );
 
@@ -1123,9 +1123,9 @@ mod tests {
 
         // Should detect the unstaged modification
         assert!(
-            updated.files_changed >= 1,
-            "expected unstaged change, got files_changed={}",
-            updated.files_changed
+            updated.file_mad_count_working_tree >= 1,
+            "expected unstaged change, got file_mad_count_working_tree={}",
+            updated.file_mad_count_working_tree
         );
     }
 
@@ -1144,9 +1144,9 @@ mod tests {
         state.update_files(&[dir.path().join("doomed.txt")]);
         let updated = state.current_status();
 
-        assert_eq!(updated.total_files_changed, 1);
-        assert!(updated.total_lines_removed > 0);
-        assert_eq!(updated.total_lines_added, 0);
+        assert_eq!(updated.file_mad_count, 1);
+        assert!(updated.lines_removed_total > 0);
+        assert_eq!(updated.lines_added_total, 0);
     }
 
     #[tokio::test]
@@ -1159,7 +1159,7 @@ mod tests {
         // Modify the file, take a base snapshot
         std::fs::write(dir.path().join("src.txt"), "modified\n").unwrap();
         let (_base, mut state) = query_git_status_blocking_with_state(dir.path()).unwrap();
-        assert_eq!(state.base_status.total_files_changed, 1);
+        assert_eq!(state.base_status.file_mad_count, 1);
 
         // Revert the file back to committed content
         std::fs::write(dir.path().join("src.txt"), "original\n").unwrap();
@@ -1169,9 +1169,9 @@ mod tests {
 
         // Should show no changes since file matches HEAD
         assert_eq!(
-            updated.total_files_changed, 0,
-            "expected 0 total_files_changed after revert, got {}",
-            updated.total_files_changed
+            updated.file_mad_count, 0,
+            "expected 0 file_mad_count after revert, got {}",
+            updated.file_mad_count
         );
     }
 
@@ -1197,7 +1197,7 @@ mod tests {
         ]);
         let updated = state.current_status();
 
-        assert_eq!(updated.total_files_changed, 2, "expected 2 changed files");
+        assert_eq!(updated.file_mad_count, 2, "expected 2 changed files");
     }
 
     #[tokio::test]
@@ -1233,22 +1233,22 @@ mod tests {
 
         assert_eq!(
             (
-                incremental.total_files_changed,
-                incremental.total_lines_added,
-                incremental.total_lines_removed
+                incremental.file_mad_count,
+                incremental.lines_added_total,
+                incremental.lines_removed_total
             ),
             (
-                full.total_files_changed,
-                full.total_lines_added,
-                full.total_lines_removed
+                full.file_mad_count,
+                full.lines_added_total,
+                full.lines_removed_total
             ),
             "incremental total ({}f, +{}, -{}) != full ({}f, +{}, -{})",
-            incremental.total_files_changed,
-            incremental.total_lines_added,
-            incremental.total_lines_removed,
-            full.total_files_changed,
-            full.total_lines_added,
-            full.total_lines_removed,
+            incremental.file_mad_count,
+            incremental.lines_added_total,
+            incremental.lines_removed_total,
+            full.file_mad_count,
+            full.lines_added_total,
+            full.lines_removed_total,
         );
     }
 
@@ -1266,7 +1266,7 @@ mod tests {
 
         // Take base
         let (base, mut state) = query_git_status_blocking_with_state(dir.path()).unwrap();
-        assert!(base.staged_files_changed >= 1, "expected staged changes");
+        assert!(base.file_mad_count_staged >= 1, "expected staged changes");
 
         // Modify a working copy file
         std::fs::write(dir.path().join("wc.txt"), "modified\n").unwrap();
@@ -1276,15 +1276,18 @@ mod tests {
 
         // Staged stats should be unchanged
         assert_eq!(
-            updated.staged_files_changed, base.staged_files_changed,
-            "staged_files_changed should be preserved"
+            updated.file_mad_count_staged, base.file_mad_count_staged,
+            "file_mad_count_staged should be preserved"
         );
         assert_eq!(
-            updated.staged_lines_added, base.staged_lines_added,
-            "staged_lines_added should be preserved"
+            updated.lines_added_staged, base.lines_added_staged,
+            "lines_added_staged should be preserved"
         );
         // Unstaged should show the working copy change
-        assert!(updated.files_changed >= 1, "expected unstaged changes");
+        assert!(
+            updated.file_mad_count_working_tree >= 1,
+            "expected unstaged changes"
+        );
     }
 
     // --- Git worker integration tests ---
@@ -1307,7 +1310,7 @@ mod tests {
             })
             .unwrap();
         let status = reply_rx.await.unwrap().unwrap();
-        assert_eq!(status.total_files_changed, 0);
+        assert_eq!(status.file_mad_count, 0);
 
         // Modify and do incremental update
         std::fs::write(dir.path().join("f.txt"), "one\nMODIFIED\nthree\nfour\n").unwrap();
@@ -1321,8 +1324,8 @@ mod tests {
             })
             .unwrap();
         let status = reply_rx.await.unwrap().unwrap();
-        assert_eq!(status.total_files_changed, 1);
-        assert!(status.total_lines_added > 0);
+        assert_eq!(status.file_mad_count, 1);
+        assert!(status.lines_added_total > 0);
     }
 
     #[tokio::test]

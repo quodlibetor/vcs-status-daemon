@@ -378,7 +378,7 @@ fn print_template_samples(tmpl: &str, color: bool) {
     let samples = template::sample_statuses();
     for (label, status) in &samples {
         let rendered = template::format_status(status, tmpl, color);
-        eprintln!("  {label:25} {rendered}");
+        eprintln!("  {label:28} {rendered}");
     }
 }
 

@@ -7,7 +7,7 @@
     {%- endif -%}
     {%- if bookmarks[0].tracking == "ahead" %}{{ "⇡" | cyan }}
     {%- elif bookmarks[0].tracking == "behind" %}{{ "⇣" | cyan }}
-    {%- elif bookmarks[0].tracking == "diverged" %}{{ "⇕" | bright_red }}
+    {%- elif bookmarks[0].tracking == "sideways" %}{{ "⇕" | bright_red }}
     {%- endif -%}
   {%- elif description -%}
     {% if immutable -%}
@@ -17,6 +17,7 @@
     {%- endif -%}
   {%- elif bookmarks and bookmarks[0].distance == 1 -%}
     {% if empty %}{{ bookmarks[0].name | green }}{% else %}{{ bookmarks[0].name | yellow }}{% endif %}
+    {%- if bookmarks[0].tracking == "sideways" %}{{ "⇕" | bright_red }}{% endif -%}
   {%- else -%}
     {{- change_id_prefix | bright_magenta | bold }}
     {{- change_id_rest | bright_black | bold }}
@@ -29,11 +30,11 @@
   {%- endif %}
   {{- ref | bright_blue }}
 {%- endif -%}
-{% if total_files_changed > 0 or untracked > 0 %}
+{% if file_mad_count > 0 or untracked > 0 %}
   {{- " [" | bright_black }}
-    {%- if total_files_modified > 0 %}{{ "~" | bright_yellow }}{% endif -%}
-    {%- if total_files_added > 0 %}{{ "+" | bright_green }}{% endif -%}
-    {%- if total_files_deleted > 0 %}{{ "-" | bright_red }}{% endif -%}
+    {%- if files_modified_total > 0 %}{{ "~" | bright_yellow }}{% endif -%}
+    {%- if files_added_total > 0 %}{{ "+" | bright_green }}{% endif -%}
+    {%- if files_deleted_total > 0 %}{{ "-" | bright_red }}{% endif -%}
     {%- if untracked > 0 %}{{ "?" | bright_magenta }}{% endif -%}
   {{- "]" | bright_black }}
 {%- endif -%}
@@ -43,4 +44,5 @@
 {% if not is_default_workspace %} {{ "木" | bright_green }}{% endif -%}
 {% if rebasing %} {{ "REBASING" | bright_magenta }}{% endif -%}
 {% if conflict %} {{ "CONFLICT" | bright_red }}{% endif -%}
-{% if divergent %} {{ "DIVERGENT" | bright_red }}{% endif %}
+{% if divergent %} {{ "DIVERGENT" | bright_red }}{% endif -%}
+{% if is_stale %} {{ "!" | yellow }}{% endif %}

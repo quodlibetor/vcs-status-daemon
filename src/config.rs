@@ -231,13 +231,13 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# vcs-status-daemon configuration
 #   conflict                       — true if there are conflicts
 #
 # Diff stats (unstaged = working tree vs index):
-#   files_changed, lines_added, lines_removed
+#   file_mad_count_working_tree, lines_added_working_tree, lines_removed_working_tree
 #
 # Diff stats (staged = index vs HEAD, git only, always 0 for jj):
-#   staged_files_changed, staged_lines_added, staged_lines_removed
+#   file_mad_count_staged, lines_added_staged, lines_removed_staged
 #
 # Diff stats (total = working tree vs HEAD):
-#   total_files_changed, total_lines_added, total_lines_removed
+#   file_mad_count, lines_added_total, lines_removed_total
 #
 # jj-only:
 #   change_id                      — jj change ID (short)

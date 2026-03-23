@@ -75,7 +75,7 @@ pub enum TrackingStatus {
     /// Local is behind remote (remote has commits local doesn't).
     Behind,
     /// Local and remote have diverged (neither is ancestor of the other).
-    Diverged,
+    Sideways,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -101,28 +101,28 @@ pub struct RepoStatus {
     pub conflict: bool,
 
     // Unstaged changes (working tree vs index for git, full @ diff for jj)
-    pub files_changed: u32,
-    pub lines_added: u32,
-    pub lines_removed: u32,
-    pub files_modified: u32,
-    pub files_added: u32,
-    pub files_deleted: u32,
+    pub file_mad_count_working_tree: u32,
+    pub lines_added_working_tree: u32,
+    pub lines_removed_working_tree: u32,
+    pub files_modified_working_tree: u32,
+    pub files_added_working_tree: u32,
+    pub files_deleted_working_tree: u32,
 
     // Staged changes (index vs HEAD for git, always 0 for jj)
-    pub staged_files_changed: u32,
-    pub staged_lines_added: u32,
-    pub staged_lines_removed: u32,
-    pub staged_files_modified: u32,
-    pub staged_files_added: u32,
-    pub staged_files_deleted: u32,
+    pub file_mad_count_staged: u32,
+    pub lines_added_staged: u32,
+    pub lines_removed_staged: u32,
+    pub files_modified_staged: u32,
+    pub files_added_staged: u32,
+    pub files_deleted_staged: u32,
 
     // Total changes (working tree vs HEAD for git, same as unstaged for jj)
-    pub total_files_changed: u32,
-    pub total_lines_added: u32,
-    pub total_lines_removed: u32,
-    pub total_files_modified: u32,
-    pub total_files_added: u32,
-    pub total_files_deleted: u32,
+    pub file_mad_count: u32,
+    pub lines_added_total: u32,
+    pub lines_removed_total: u32,
+    pub files_modified_total: u32,
+    pub files_added_total: u32,
+    pub files_deleted_total: u32,
 
     // Git-only: files not in index or HEAD
     pub untracked: u32,
@@ -164,24 +164,24 @@ impl Default for RepoStatus {
             description: String::new(),
             empty: false,
             conflict: false,
-            files_changed: 0,
-            lines_added: 0,
-            lines_removed: 0,
-            files_modified: 0,
-            files_added: 0,
-            files_deleted: 0,
-            staged_files_changed: 0,
-            staged_lines_added: 0,
-            staged_lines_removed: 0,
-            staged_files_modified: 0,
-            staged_files_added: 0,
-            staged_files_deleted: 0,
-            total_files_changed: 0,
-            total_lines_added: 0,
-            total_lines_removed: 0,
-            total_files_modified: 0,
-            total_files_added: 0,
-            total_files_deleted: 0,
+            file_mad_count_working_tree: 0,
+            lines_added_working_tree: 0,
+            lines_removed_working_tree: 0,
+            files_modified_working_tree: 0,
+            files_added_working_tree: 0,
+            files_deleted_working_tree: 0,
+            file_mad_count_staged: 0,
+            lines_added_staged: 0,
+            lines_removed_staged: 0,
+            files_modified_staged: 0,
+            files_added_staged: 0,
+            files_deleted_staged: 0,
+            file_mad_count: 0,
+            lines_added_total: 0,
+            lines_removed_total: 0,
+            files_modified_total: 0,
+            files_added_total: 0,
+            files_deleted_total: 0,
             untracked: 0,
             change_id: String::new(),
             change_id_prefix_len: usize::MAX,
@@ -286,28 +286,40 @@ pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String
     ctx.insert("conflict", &status.conflict);
 
     // Unstaged changes (working tree vs index for git, full @ diff for jj)
-    ctx.insert("files_changed", &status.files_changed);
-    ctx.insert("lines_added", &status.lines_added);
-    ctx.insert("lines_removed", &status.lines_removed);
-    ctx.insert("files_modified", &status.files_modified);
-    ctx.insert("files_added", &status.files_added);
-    ctx.insert("files_deleted", &status.files_deleted);
+    ctx.insert(
+        "file_mad_count_working_tree",
+        &status.file_mad_count_working_tree,
+    );
+    ctx.insert("lines_added_working_tree", &status.lines_added_working_tree);
+    ctx.insert(
+        "lines_removed_working_tree",
+        &status.lines_removed_working_tree,
+    );
+    ctx.insert(
+        "files_modified_working_tree",
+        &status.files_modified_working_tree,
+    );
+    ctx.insert("files_added_working_tree", &status.files_added_working_tree);
+    ctx.insert(
+        "files_deleted_working_tree",
+        &status.files_deleted_working_tree,
+    );
 
     // Staged changes (index vs HEAD for git, always 0 for jj)
-    ctx.insert("staged_files_changed", &status.staged_files_changed);
-    ctx.insert("staged_lines_added", &status.staged_lines_added);
-    ctx.insert("staged_lines_removed", &status.staged_lines_removed);
-    ctx.insert("staged_files_modified", &status.staged_files_modified);
-    ctx.insert("staged_files_added", &status.staged_files_added);
-    ctx.insert("staged_files_deleted", &status.staged_files_deleted);
+    ctx.insert("file_mad_count_staged", &status.file_mad_count_staged);
+    ctx.insert("lines_added_staged", &status.lines_added_staged);
+    ctx.insert("lines_removed_staged", &status.lines_removed_staged);
+    ctx.insert("files_modified_staged", &status.files_modified_staged);
+    ctx.insert("files_added_staged", &status.files_added_staged);
+    ctx.insert("files_deleted_staged", &status.files_deleted_staged);
 
     // Total changes (working tree vs HEAD for git, same as unstaged for jj)
-    ctx.insert("total_files_changed", &status.total_files_changed);
-    ctx.insert("total_lines_added", &status.total_lines_added);
-    ctx.insert("total_lines_removed", &status.total_lines_removed);
-    ctx.insert("total_files_modified", &status.total_files_modified);
-    ctx.insert("total_files_added", &status.total_files_added);
-    ctx.insert("total_files_deleted", &status.total_files_deleted);
+    ctx.insert("file_mad_count", &status.file_mad_count);
+    ctx.insert("lines_added_total", &status.lines_added_total);
+    ctx.insert("lines_removed_total", &status.lines_removed_total);
+    ctx.insert("files_modified_total", &status.files_modified_total);
+    ctx.insert("files_added_total", &status.files_added_total);
+    ctx.insert("files_deleted_total", &status.files_deleted_total);
 
     // Git-only: untracked files
     ctx.insert("untracked", &status.untracked);
@@ -407,38 +419,19 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
                 description: "add tests".into(),
                 bookmarks: vec![Bookmark {
                     name: "main".into(),
-                    distance: 2,
-                    display: "main+2".into(),
-                    ..Default::default()
-                }],
-                files_changed: 3,
-                lines_added: 10,
-                lines_removed: 5,
-                total_files_changed: 3,
-                total_lines_added: 10,
-                total_lines_removed: 5,
-                ..Default::default()
-            },
-        ),
-        (
-            "jj: new, working",
-            RepoStatus {
-                is_jj: true,
-                change_id: "qstvwxyz".into(),
-                change_id_prefix_len: 2,
-                commit_id: "mno45678".into(),
-                bookmarks: vec![Bookmark {
-                    name: "main".into(),
                     distance: 1,
                     display: "main+1".into(),
                     ..Default::default()
                 }],
-                files_changed: 2,
-                lines_added: 8,
-                lines_removed: 1,
-                total_files_changed: 2,
-                total_lines_added: 8,
-                total_lines_removed: 1,
+                file_mad_count_working_tree: 3,
+                files_modified_total: 1,
+                files_added_total: 2,
+                files_deleted_total: 3,
+                lines_added_working_tree: 10,
+                lines_removed_working_tree: 5,
+                file_mad_count: 3,
+                lines_added_total: 10,
+                lines_removed_total: 5,
                 ..Default::default()
             },
         ),
@@ -515,7 +508,7 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
             },
         ),
         (
-            "jj: bookmark diverged",
+            "jj: bookmark sideways",
             RepoStatus {
                 is_jj: true,
                 change_id: "lmnopqrs".into(),
@@ -524,9 +517,9 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
                 empty: true,
                 bookmarks: vec![Bookmark {
                     name: "main".into(),
-                    distance: 0,
-                    display: "main".into(),
-                    tracking: TrackingStatus::Diverged,
+                    distance: 1,
+                    display: "main+1".into(),
+                    tracking: TrackingStatus::Sideways,
                 }],
                 ..Default::default()
             },
@@ -566,12 +559,14 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
                 branch: "feature".into(),
                 commit_id: "def5678".into(),
                 description: "wip".into(),
-                staged_files_changed: 2,
-                staged_lines_added: 15,
-                staged_lines_removed: 3,
-                total_files_changed: 2,
-                total_lines_added: 15,
-                total_lines_removed: 3,
+                file_mad_count_staged: 2,
+                files_modified_staged: 2,
+                lines_added_staged: 15,
+                lines_removed_staged: 3,
+                file_mad_count: 2,
+                files_modified_total: 2,
+                lines_added_total: 15,
+                lines_removed_total: 3,
                 ..Default::default()
             },
         ),
@@ -582,12 +577,14 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
                 branch: "develop".into(),
                 commit_id: "789abcd".into(),
                 description: "fix bug".into(),
-                files_changed: 1,
-                lines_added: 4,
-                lines_removed: 2,
-                total_files_changed: 1,
-                total_lines_added: 4,
-                total_lines_removed: 2,
+                file_mad_count_working_tree: 1,
+                files_modified_working_tree: 1,
+                lines_added_working_tree: 4,
+                lines_removed_working_tree: 2,
+                file_mad_count: 1,
+                files_modified_total: 1,
+                lines_added_total: 4,
+                lines_removed_total: 2,
                 ..Default::default()
             },
         ),
@@ -625,10 +622,10 @@ pub fn sample_statuses() -> Vec<(&'static str, RepoStatus)> {
                 ahead: 3,
                 behind: 1,
                 stashes: 2,
-                files_changed: 1,
-                files_modified: 1,
-                total_files_changed: 1,
-                total_files_modified: 1,
+                file_mad_count_working_tree: 1,
+                files_modified_working_tree: 1,
+                file_mad_count: 1,
+                files_modified_total: 1,
                 ..Default::default()
             },
         ),
@@ -690,16 +687,16 @@ mod tests {
                 display: "main".into(),
                 ..Default::default()
             }],
-            files_changed: 3,
-            lines_added: 10,
-            lines_removed: 5,
-            files_modified: 2,
-            files_added: 1,
-            total_files_changed: 3,
-            total_lines_added: 10,
-            total_lines_removed: 5,
-            total_files_modified: 2,
-            total_files_added: 1,
+            file_mad_count_working_tree: 3,
+            lines_added_working_tree: 10,
+            lines_removed_working_tree: 5,
+            files_modified_working_tree: 2,
+            files_added_working_tree: 1,
+            file_mad_count: 3,
+            lines_added_total: 10,
+            lines_removed_total: 5,
+            files_modified_total: 2,
+            files_added_total: 1,
             ..Default::default()
         };
         let formatted = format_status(&status, ASCII_FORMAT, false);
@@ -725,12 +722,12 @@ mod tests {
             is_git: true,
             branch: "main".to_string(),
             commit_id: "abc1234".to_string(),
-            total_files_changed: 3,
-            total_lines_added: 10,
-            total_lines_removed: 5,
-            total_files_modified: 1,
-            total_files_added: 1,
-            total_files_deleted: 1,
+            file_mad_count: 3,
+            lines_added_total: 10,
+            lines_removed_total: 5,
+            files_modified_total: 1,
+            files_added_total: 1,
+            files_deleted_total: 1,
             ..Default::default()
         };
         let formatted = format_status(&status, ASCII_FORMAT, false);
@@ -807,11 +804,11 @@ format = '''
                     display: "main".into(),
                     ..Default::default()
                 }],
-                total_files_changed: 3,
-                total_lines_added: 10,
-                total_lines_removed: 5,
-                total_files_modified: 2,
-                total_files_added: 1,
+                file_mad_count: 3,
+                lines_added_total: 10,
+                lines_removed_total: 5,
+                files_modified_total: 2,
+                files_added_total: 1,
                 ..Default::default()
             },
             RepoStatus {
@@ -831,10 +828,10 @@ format = '''
                         ..Default::default()
                     },
                 ],
-                total_files_changed: 1,
-                total_lines_added: 7,
-                total_lines_removed: 0,
-                total_files_modified: 1,
+                file_mad_count: 1,
+                lines_added_total: 7,
+                lines_removed_total: 0,
+                files_modified_total: 1,
                 ..Default::default()
             },
             RepoStatus {
@@ -848,12 +845,12 @@ format = '''
                 is_git: true,
                 branch: "main".into(),
                 commit_id: "abc1234".into(),
-                total_files_changed: 3,
-                total_lines_added: 10,
-                total_lines_removed: 5,
-                total_files_modified: 1,
-                total_files_added: 1,
-                total_files_deleted: 1,
+                file_mad_count: 3,
+                lines_added_total: 10,
+                lines_removed_total: 5,
+                files_modified_total: 1,
+                files_added_total: 1,
+                files_deleted_total: 1,
                 ..Default::default()
             },
             RepoStatus {
@@ -898,9 +895,9 @@ format = '''
                 display: "main".into(),
                 ..Default::default()
             }],
-            total_files_changed: 3,
-            total_lines_added: 10,
-            total_lines_removed: 5,
+            file_mad_count: 3,
+            lines_added_total: 10,
+            lines_removed_total: 5,
             ..Default::default()
         };
         let formatted = format_status(&status, NERDFONT_FORMAT, false);
@@ -925,9 +922,9 @@ format = '''
             is_git: true,
             branch: "main".to_string(),
             commit_id: "abc1234".to_string(),
-            total_files_changed: 2,
-            total_lines_added: 7,
-            total_lines_removed: 3,
+            file_mad_count: 2,
+            lines_added_total: 7,
+            lines_removed_total: 3,
             ..Default::default()
         };
         let formatted = format_status(&status, NERDFONT_FORMAT, false);
@@ -969,9 +966,9 @@ format = '''
                 display: "main".into(),
                 ..Default::default()
             }],
-            total_files_changed: 3,
-            total_lines_added: 10,
-            total_lines_removed: 5,
+            file_mad_count: 3,
+            lines_added_total: 10,
+            lines_removed_total: 5,
             ..Default::default()
         };
         let formatted = format_status(&status, UNICODE_FORMAT, false);
@@ -1063,9 +1060,9 @@ format = '''
             is_jj: true,
             change_id: "mrtu".to_string(),
             change_id_prefix_len: 2,
-            total_files_changed: 2,
-            total_files_modified: 1,
-            total_files_added: 1,
+            file_mad_count: 2,
+            files_modified_total: 1,
+            files_added_total: 1,
             ..Default::default()
         };
         let formatted = format_status(&status, SIMPLE_FORMAT, false);
@@ -1100,9 +1097,9 @@ format = '''
         let status = RepoStatus {
             is_git: true,
             branch: "develop".to_string(),
-            total_files_changed: 3,
-            total_files_modified: 1,
-            total_files_deleted: 1,
+            file_mad_count: 3,
+            files_modified_total: 1,
+            files_deleted_total: 1,
             untracked: 1,
             ..Default::default()
         };
@@ -1125,7 +1122,7 @@ format = '''
         let status = RepoStatus {
             is_jj: true,
             change_id: "mrtu".to_string(),
-            files_changed: 3, // dirty doesn't matter — still green
+            file_mad_count_working_tree: 3, // dirty doesn't matter — still green
             bookmarks: vec![Bookmark {
                 name: "main".into(),
                 distance: 0,
@@ -1152,7 +1149,7 @@ format = '''
             is_jj: true,
             change_id: "mrtu".to_string(),
             description: "fix auth".to_string(),
-            files_changed: 2,
+            file_mad_count_working_tree: 2,
             ..Default::default()
         };
         let formatted = format_status(&status, MINIMAL_FORMAT, true);
@@ -1199,7 +1196,7 @@ format = '''
             is_jj: true,
             change_id: "mrtu".to_string(),
             empty: false,
-            files_changed: 2,
+            file_mad_count_working_tree: 2,
             bookmarks: vec![Bookmark {
                 name: "main".into(),
                 distance: 1,
@@ -1246,7 +1243,7 @@ format = '''
             is_jj: true,
             change_id: "mrtu".to_string(),
             empty: false,
-            files_changed: 1,
+            file_mad_count_working_tree: 1,
             ..Default::default()
         };
         let formatted = format_status(&status, MINIMAL_FORMAT, true);
@@ -1267,7 +1264,7 @@ format = '''
             is_jj: true,
             change_id: "mrtu".to_string(),
             empty: false,
-            files_changed: 1,
+            file_mad_count_working_tree: 1,
             bookmarks: vec![Bookmark {
                 name: "main".into(),
                 distance: 3,
@@ -1296,8 +1293,8 @@ format = '''
         let status = RepoStatus {
             is_git: true,
             branch: "develop".to_string(),
-            files_changed: 2,
-            total_files_changed: 2,
+            file_mad_count_working_tree: 2,
+            file_mad_count: 2,
             ..Default::default()
         };
         let formatted = format_status(&status, MINIMAL_FORMAT, true);
@@ -1316,10 +1313,10 @@ format = '''
         let status = RepoStatus {
             is_git: true,
             branch: "feature".to_string(),
-            staged_files_changed: 1,
-            staged_lines_added: 3,
-            total_files_changed: 1,
-            total_lines_added: 3,
+            file_mad_count_staged: 1,
+            lines_added_staged: 3,
+            file_mad_count: 1,
+            lines_added_total: 3,
             ..Default::default()
         };
         let formatted = format_status(&status, MINIMAL_FORMAT, true);
@@ -1517,12 +1514,12 @@ format = '''
         let status = RepoStatus {
             is_git: true,
             branch: "main".to_string(),
-            staged_files_changed: 2,
-            staged_files_added: 1,
-            staged_files_modified: 1,
-            files_changed: 3,
-            files_modified: 2,
-            files_added: 1,
+            file_mad_count_staged: 2,
+            files_added_staged: 1,
+            files_modified_staged: 1,
+            file_mad_count_working_tree: 3,
+            files_modified_working_tree: 2,
+            files_added_working_tree: 1,
             untracked: 4,
             ..Default::default()
         };
@@ -1552,9 +1549,9 @@ format = '''
                 display: "main".into(),
                 ..Default::default()
             }],
-            total_files_changed: 3,
-            total_files_modified: 2,
-            total_files_added: 1,
+            file_mad_count: 3,
+            files_modified_total: 2,
+            files_added_total: 1,
             ..Default::default()
         };
         let formatted = format_status(&status, GITSTATUS_FORMAT, false);
@@ -1568,10 +1565,10 @@ format = '''
         let status = RepoStatus {
             is_git: true,
             branch: "main".to_string(),
-            staged_files_added: 1,
-            staged_files_changed: 1,
-            files_modified: 2,
-            files_changed: 2,
+            files_added_staged: 1,
+            file_mad_count_staged: 1,
+            files_modified_working_tree: 2,
+            file_mad_count_working_tree: 2,
             untracked: 3,
             ..Default::default()
         };
@@ -1601,8 +1598,8 @@ format = '''
                 display: "main".into(),
                 ..Default::default()
             }],
-            total_files_changed: 2,
-            total_files_modified: 2,
+            file_mad_count: 2,
+            files_modified_total: 2,
             ..Default::default()
         };
         let formatted = format_status(&status, STARSHIP_FORMAT, false);
@@ -1616,10 +1613,10 @@ format = '''
         let status = RepoStatus {
             is_git: true,
             branch: "main".to_string(),
-            staged_files_changed: 1,
-            staged_files_modified: 1,
-            files_modified: 2,
-            files_changed: 2,
+            file_mad_count_staged: 1,
+            files_modified_staged: 1,
+            files_modified_working_tree: 2,
+            file_mad_count_working_tree: 2,
             untracked: 1,
             ..Default::default()
         };
@@ -1662,8 +1659,8 @@ format = '''
         let status = RepoStatus {
             is_git: true,
             branch: "main".to_string(),
-            files_changed: 1,
-            files_modified: 1,
+            file_mad_count_working_tree: 1,
+            files_modified_working_tree: 1,
             ..Default::default()
         };
         let formatted = format_status(&status, PURE_FORMAT, false);
@@ -1692,8 +1689,8 @@ format = '''
                 display: "main".into(),
                 ..Default::default()
             }],
-            total_files_changed: 3,
-            total_files_modified: 3,
+            file_mad_count: 3,
+            files_modified_total: 3,
             ..Default::default()
         };
         let formatted = format_status(&status, PURE_FORMAT, false);
@@ -1894,7 +1891,7 @@ format = '''
     }
 
     #[test]
-    fn test_gitstatus_jj_bookmark_diverged() {
+    fn test_gitstatus_jj_bookmark_sideways() {
         let status = RepoStatus {
             is_jj: true,
             change_id: "xlvlt".to_string(),
@@ -1902,14 +1899,14 @@ format = '''
                 name: "main".into(),
                 distance: 0,
                 display: "main".into(),
-                tracking: TrackingStatus::Diverged,
+                tracking: TrackingStatus::Sideways,
             }],
             ..Default::default()
         };
         let formatted = format_status(&status, GITSTATUS_FORMAT, false);
         assert!(
             formatted.contains("main⇕"),
-            "expected 'main⇕' for diverged tracking: {formatted:?}"
+            "expected 'main⇕' for sideways tracking: {formatted:?}"
         );
     }
 

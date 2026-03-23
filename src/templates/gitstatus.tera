@@ -4,7 +4,7 @@
     Indicators: ~=conflicts, +=staged, !=unstaged, ?=untracked
 -#}
 {% if is_jj -%}
-  {% set dirty = total_files_changed > 0 -%}
+  {% set dirty = file_mad_count > 0 -%}
   {%- if dirty -%}
     {{ change_id_prefix | yellow }}{{ change_id_rest | bright_black }}
   {%- else -%}
@@ -13,16 +13,16 @@
   {%- for b in bookmarks %} {{ b.display | green }}
     {%- if b.tracking == "ahead" %}{{ "⇡" | green }}
     {%- elif b.tracking == "behind" %}{{ "⇣" | green }}
-    {%- elif b.tracking == "diverged" %}{{ "⇕" | red }}
+    {%- elif b.tracking == "sideways" %}{{ "⇕" | red }}
     {%- endif %}
   {%- endfor %}
-  {%- if conflict %} {{ "~" ~ total_files_changed | red }}
-  {%- elif total_files_modified > 0 %} {{ "!" ~ total_files_modified | yellow }}
+  {%- if conflict %} {{ "~" ~ file_mad_count | red }}
+  {%- elif files_modified_total > 0 %} {{ "!" ~ files_modified_total | yellow }}
   {%- endif -%}
-  {%- if total_files_added > 0 %} {{ "+" ~ total_files_added | yellow }}{% endif -%}
-  {%- if total_files_deleted > 0 %} {{ "-" ~ total_files_deleted | yellow }}{% endif -%}
+  {%- if files_added_total > 0 %} {{ "+" ~ files_added_total | yellow }}{% endif -%}
+  {%- if files_deleted_total > 0 %} {{ "-" ~ files_deleted_total | yellow }}{% endif -%}
 {%- elif is_git -%}
-  {%- set dirty = files_changed > 0 or staged_files_changed > 0 -%}
+  {%- set dirty = file_mad_count_working_tree > 0 or file_mad_count_staged > 0 -%}
   {%- set has_untracked = untracked > 0 -%}
   {%- if has_branch -%}
     {%- if conflict -%}
@@ -37,9 +37,9 @@
   {%- else -%}
     {{ "@" ~ commit_id | green }}
   {%- endif -%}
-  {%- if conflict %} {{ "~" ~ total_files_changed | red }}{% endif -%}
-  {%- if staged_files_changed > 0 %} {{ "+" ~ staged_files_changed | yellow }}{% endif -%}
-  {%- if files_changed > 0 %} {{ "!" ~ files_changed | yellow }}{% endif -%}
+  {%- if conflict %} {{ "~" ~ file_mad_count | red }}{% endif -%}
+  {%- if file_mad_count_staged > 0 %} {{ "+" ~ file_mad_count_staged | yellow }}{% endif -%}
+  {%- if file_mad_count_working_tree > 0 %} {{ "!" ~ file_mad_count_working_tree | yellow }}{% endif -%}
   {%- if untracked > 0 %} {{ "?" ~ untracked | blue }}{% endif -%}
 {%- endif -%}
 {% if behind > 0 %} {{ "⇣" ~ behind | green }}{% endif -%}

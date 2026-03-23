@@ -988,7 +988,7 @@ async fn refresh_repo(
                 elapsed_ms = refresh_start.elapsed().as_millis() as u64,
                 incremental = was_incremental,
                 change_id = %status.change_id,
-                files_changed = status.files_changed,
+                file_mad_count_working_tree = status.file_mad_count_working_tree,
                 "refresh complete"
             );
             let mut st = state.lock().await;

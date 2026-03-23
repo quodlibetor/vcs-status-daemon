@@ -243,21 +243,23 @@ The daemon detects whether a repository uses jj or git (jj wins if both `.jj/` a
 
 #### Diff stats
 
-There are three groups of diff stat variables. For jj repos (which have no staging area), `files_changed` and `total_files_changed` are identical, and `staged_*` is always 0. For git repos, all three groups are independently populated.
+There are three groups of diff stat variables. For jj repos (which have no staging area), `*_working_tree` and unsuffixed/`*_total` are identical, and `*_staged` is always 0. For git repos, all three groups are independently populated.
+
+`file_mad_count` is the total number of **m**odified + **a**dded + **d**eleted files (i.e., `files_modified + files_added + files_deleted`).
 
 | Variable | Type | jj | git |
 |---|---|---|---|
-| `files_changed` | integer | Files changed in `@` vs parent | Unstaged: working tree vs index |
-| `lines_added` | integer | Lines added in `@` | Unstaged lines added |
-| `lines_removed` | integer | Lines removed in `@` | Unstaged lines removed |
-| `staged_files_changed` | integer | Always 0 | Staged: index vs HEAD |
-| `staged_lines_added` | integer | Always 0 | Staged lines added |
-| `staged_lines_removed` | integer | Always 0 | Staged lines removed |
-| `total_files_changed` | integer | Same as `files_changed` | Total: working tree vs HEAD |
-| `total_lines_added` | integer | Same as `lines_added` | Total lines added |
-| `total_lines_removed` | integer | Same as `lines_removed` | Total lines removed |
+| `file_mad_count_working_tree` | integer | Files changed in `@` vs parent | Unstaged: working tree vs index |
+| `lines_added_working_tree` | integer | Lines added in `@` | Unstaged lines added |
+| `lines_removed_working_tree` | integer | Lines removed in `@` | Unstaged lines removed |
+| `file_mad_count_staged` | integer | Always 0 | Staged: index vs HEAD |
+| `lines_added_staged` | integer | Always 0 | Staged lines added |
+| `lines_removed_staged` | integer | Always 0 | Staged lines removed |
+| `file_mad_count` | integer | Same as `file_mad_count_working_tree` | Total: working tree vs HEAD |
+| `lines_added_total` | integer | Same as `lines_added_working_tree` | Total lines added |
+| `lines_removed_total` | integer | Same as `lines_removed_working_tree` | Total lines removed |
 
-The default template uses `total_*` since it gives the complete picture for both VCS types.
+The default template uses unsuffixed/`*_total` since it gives the complete picture for both VCS types.
 
 #### jj-only fields
 
@@ -326,7 +328,7 @@ Colors are applied using Tera's filter syntax: `{{ value | green }}`. When `colo
 | `bright_cyan` | `\e[96m` |
 | `bright_white` | `\e[97m` |
 
-You can apply filters to variables (`{{ branch | green }}`), string literals (`{{ "CONFLICT" | bright_red }}`), or concatenated values (`{{ "+" ~ total_lines_added | bright_green }}`).
+You can apply filters to variables (`{{ branch | green }}`), string literals (`{{ "CONFLICT" | bright_red }}`), or concatenated values (`{{ "+" ~ lines_added_total | bright_green }}`).
 
 ### Built-in templates
 
@@ -446,7 +448,7 @@ format = '''
 {%- if description %} {{ description | dim }}{% endif %}
 {%- elif is_git %}{% if has_branch %}{{ branch | blue }}{% else %}{{ commit_id | dim }}{% endif %}
 {%- endif %}
-{%- if total_files_changed > 0 %} {{ total_files_changed | bright_blue }}f {{ "+" ~ total_lines_added | bright_green }} {{ "-" ~ total_lines_removed | bright_red }}{% endif %}
+{%- if file_mad_count > 0 %} {{ file_mad_count | bright_blue }}f {{ "+" ~ lines_added_total | bright_green }} {{ "-" ~ lines_removed_total | bright_red }}{% endif %}
 {%- if empty %} {{ "empty" | yellow }}{% endif %}
 {%- if conflict %} {{ "conflict!" | bright_red }}{% endif %}'''
 ```

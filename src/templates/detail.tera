@@ -4,25 +4,25 @@
   {%- for b in bookmarks %} {{ bookmark_prefix ~ b.display | blue }}
     {%- if b.tracking == "ahead" %}{{ tracking_ahead | cyan }}
     {%- elif b.tracking == "behind" %}{{ tracking_behind | cyan }}
-    {%- elif b.tracking == "diverged" %}{{ tracking_diverged | bright_red }}
+    {%- elif b.tracking == "sideways" %}{{ tracking_sideways | bright_red }}
     {%- endif -%}
   {%- endfor -%}
 {%- elif is_git -%}
   {{ git_icon | blue }} {% if has_branch %}{{ branch | blue }}{% else %}{{ "HEAD " | magenta }}{{ "(" ~ commit_id ~ ")" | green | bold }}{% endif %}
 {%- endif -%}
-{% if total_files_changed > 0 or untracked > 0 %}
+{% if file_mad_count > 0 or untracked > 0 %}
   {{- " [" | blue }}
-  {%- if total_lines_added > 0 or total_lines_removed > 0 %}
+  {%- if lines_added_total > 0 or lines_removed_total > 0 %}
     {{- files_icon | bright_blue }}
   {%- endif %}
-  {%- if total_files_modified > 0 %}{{ "~" ~ total_files_modified | bright_yellow }}{% endif -%}
-  {%- if total_files_added > 0 %}{{ "+" ~ total_files_added | bright_green }}{% endif -%}
-  {%- if total_files_deleted > 0 %}{{ "-" ~ total_files_deleted | bright_red }}{% endif -%}
+  {%- if files_modified_total > 0 %}{{ "~" ~ files_modified_total | bright_yellow }}{% endif -%}
+  {%- if files_added_total > 0 %}{{ "+" ~ files_added_total | bright_green }}{% endif -%}
+  {%- if files_deleted_total > 0 %}{{ "-" ~ files_deleted_total | bright_red }}{% endif -%}
   {%- if untracked > 0 %}{{ "?" ~ untracked | bright_cyan }}{% endif -%}
-  {%- if total_lines_added > 0 or total_lines_removed > 0 %}
+  {%- if lines_added_total > 0 or lines_removed_total > 0 %}
     {{- " " }}{{ lines_icon | bright_blue }}
-    {%- if total_lines_added > 0 %}{{ "+" ~ total_lines_added | bright_green }}{% endif -%}
-    {%- if total_lines_removed > 0 %}{{ "-" ~ total_lines_removed | bright_red }}{% endif -%}
+    {%- if lines_added_total > 0 %}{{ "+" ~ lines_added_total | bright_green }}{% endif -%}
+    {%- if lines_removed_total > 0 %}{{ "-" ~ lines_removed_total | bright_red }}{% endif -%}
   {%- endif %}
   {{- "]" | blue }}
 {%- endif -%}

@@ -15,7 +15,7 @@
 {% set lines_icon = "󰗚 " -%}
 {% set tracking_ahead = "⇡" -%}
 {% set tracking_behind = "⇣" -%}
-{% set tracking_diverged = "⇕" -%}
+{% set tracking_sideways = "⇕" -%}
 {% set workspace_open = "󰐅 (" -%}
 {% set workspace_close = ")" -%}
 {% include "detail.tera" %}
