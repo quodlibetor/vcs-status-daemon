@@ -1,3 +1,29 @@
+# v0.0.10
+
+Nested gitignore support, new template commands, and incremental diff observability.
+
+**Nested gitignore discovery**
+- **lazy nested `.gitignore`/`.jjignore` loading**: the file watcher now
+  discovers ignore files in subdirectories as events arrive, rather than
+  only loading root-level ignore files. New `IgnoreFilter` struct handles
+  thread-safe lazy discovery and rebuilds the matcher when ignore files
+  are created, modified, or deleted.
+
+**New template commands**
+- **`template print <name>`**: prints the raw Tera source of a template
+  with includes inlined.
+- **`template list -n`**: prints just template names (builtins +
+  user-defined) without descriptions.
+
+**Observability**
+- **incremental diff stats in `status`**: the `status` subcommand now
+  shows per-repo incremental diff overlay statistics (base files, overlay
+  entries, file/line counts), queried from the jj and git worker threads.
+
+**Bug fixes**
+- **fix: export `VCS_STATUS_DAEMON` env var for starship** so the
+  starship template preset works correctly.
+
 # v0.0.9
 
 Richer status information, seamless upgrades, and better observability.
