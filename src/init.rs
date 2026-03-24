@@ -27,9 +27,9 @@ const ZSH_HOOK: &str = r#"_vcs_status_precmd() {
   local cwd="${PWD:A}"
   local cache="$dir/cache/${cwd//\//%}"
   if [[ -f "$cache" ]]; then
-    VCS_STATUS="$(<"$cache")"
+    export VCS_STATUS="$(<"$cache")"
   else
-    VCS_STATUS="$(vcs-status-daemon)"
+    export VCS_STATUS="$(vcs-status-daemon)"
   fi
 }
 precmd_functions+=(_vcs_status_precmd)
@@ -41,9 +41,9 @@ const BASH_HOOK: &str = r#"_vcs_status_precmd() {
   cwd=$(pwd -P)
   local cache="$dir/cache/${cwd//\//%}"
   if [[ -f "$cache" ]]; then
-    VCS_STATUS="$(<"$cache")"
+    export VCS_STATUS="$(<"$cache")"
   else
-    VCS_STATUS="$(vcs-status-daemon)"
+    export VCS_STATUS="$(vcs-status-daemon)"
   fi
 }
 PROMPT_COMMAND="_vcs_status_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
