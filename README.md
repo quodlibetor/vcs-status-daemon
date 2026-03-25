@@ -148,7 +148,7 @@ And you can view the source code defining a template with the
 `vcs-status-daemon template print NAME` command.
 
 There are several built-in templates that you can view with the
-`vcs-status-daemon template list` command:
+`vcs-status-daemon template show` command:
 
 #### vcs-status-daemin detailed templates
 
@@ -187,17 +187,18 @@ vcs-status-daemon config set  K=V  # set a config value
 vcs-status-daemon config edit      # open config in $EDITOR, with
 vcs-status-daemon config path      # print config file path
 
+# Preview and manage templates
+vcs-status-daemon template show [NAMES...] [-n]      # show templates (all, or filtered by name)
+vcs-status-daemon template print NAME                # print raw template source
+vcs-status-daemon template format "{{ change_id }}"  # test a custom template
+vcs-status-daemon template set --name nerdfont       # set active template by name (alias for config set)
+vcs-status-daemon template set --format "{{ ... }}"  # set an inline format template (alias for config set)
+
 # Restart the daemon (graceful shutdown + restart)
 vcs-status-daemon restart
 
 # Show daemon status (running, PID, uptime, watched repos)
 vcs-status-daemon status
-
-# Preview templates
-vcs-status-daemon template list              # show all templates with sample output
-vcs-status-daemon template list -n           # list just template names
-vcs-status-daemon template print ascii       # print raw template source (includes inlined)
-vcs-status-daemon template format "{{ change_id }}"  # test a custom template
 ```
 
 The client sends its current directory to the daemon, which walks up the directory tree to find a repo root (`.jj/` or `.git/`). The mapping from directory to repo root is cached. When run outside a recognized repository, the client exits silently with exit code 0, making it safe for unconditional prompt use.

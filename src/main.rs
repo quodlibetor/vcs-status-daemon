@@ -134,8 +134,10 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum TemplateAction {
-    /// List available templates with representative outputs
-    List {
+    /// Show available templates with representative outputs
+    Show {
+        /// Template names to show (shows all if omitted)
+        names: Vec<String>,
         /// Print only template names, one per line
         #[arg(short = 'n', long)]
         name_only: bool,
@@ -149,11 +151,23 @@ enum TemplateAction {
         repo: Option<PathBuf>,
     },
     /// Print the raw Tera template source (includes are inlined).
-    /// Use `template list -n` to see available template names.
+    /// Use `template show -n` to see available template names.
     Print {
         /// Template name (e.g. "ascii", "nerdfont", or a user-defined name).
-        /// Run `template list -n` to see available names.
+        /// Run `template show -n` to see available names.
         name: String,
+    },
+    /// Set the active template by name or inline format string
+    #[command(group(clap::ArgGroup::new("template_set").required(true)))]
+    Set {
+        /// Template name (e.g. "ascii", "nerdfont", or a user-defined name).
+        /// Equivalent to `config set template_name <NAME>`.
+        #[arg(long, group = "template_set")]
+        name: Option<String>,
+        /// Inline format template (Tera/Jinja2 syntax).
+        /// Equivalent to `config set format <TEMPLATE>`.
+        #[arg(long, group = "template_set")]
+        format: Option<String>,
     },
 }
 
@@ -426,32 +440,51 @@ fn query_live_status(repo_path: &std::path::Path) -> anyhow::Result<template::Re
     })
 }
 
-fn run_template(action: TemplateAction) -> anyhow::Result<()> {
+fn run_template(action: TemplateAction, config_file: Option<&Path>) -> anyhow::Result<()> {
     let color = std::io::IsTerminal::is_terminal(&std::io::stderr());
 
     match action {
-        TemplateAction::List { name_only } => {
+        TemplateAction::Show { names, name_only } => {
             let cfg = config::load_config()?;
             let mut user_names: Vec<&str> = cfg.templates.keys().map(|s| s.as_str()).collect();
             user_names.sort();
 
-            if name_only {
-                for name in template::BUILTIN_NAMES {
-                    println!("{name}");
+            let filter: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+
+            // Collect the templates to display in order: builtins then user-defined
+            let mut to_show: Vec<(&str, &str, bool)> = Vec::new();
+            for name in template::BUILTIN_NAMES {
+                if filter.is_empty() || filter.contains(name) {
+                    to_show.push((name, template::builtin_template(name).unwrap(), false));
                 }
-                for name in &user_names {
+            }
+            for name in &user_names {
+                if filter.is_empty() || filter.contains(name) {
+                    to_show.push((name, &cfg.templates[*name], true));
+                }
+            }
+
+            if !filter.is_empty() {
+                for f in &filter {
+                    if !to_show.iter().any(|(n, _, _)| n == f) {
+                        anyhow::bail!(
+                            "unknown template: {f}\nRun `vcs-status-daemon template show -n` to see available names."
+                        );
+                    }
+                }
+            }
+
+            if name_only {
+                for (name, _, _) in &to_show {
                     println!("{name}");
                 }
             } else {
-                for name in template::BUILTIN_NAMES {
-                    let tmpl = template::builtin_template(name).unwrap();
-                    eprintln!("\x1b[1m{name}\x1b[0m:");
-                    print_template_samples(tmpl, color);
-                    eprintln!();
-                }
-                for name in &user_names {
-                    let tmpl = &cfg.templates[*name];
-                    eprintln!("\x1b[1m{name}\x1b[0m (user-defined):");
+                for (name, tmpl, user_defined) in &to_show {
+                    if *user_defined {
+                        eprintln!("\x1b[1m{name}\x1b[0m (user-defined):");
+                    } else {
+                        eprintln!("\x1b[1m{name}\x1b[0m:");
+                    }
                     print_template_samples(tmpl, color);
                     eprintln!();
                 }
@@ -466,7 +499,7 @@ fn run_template(action: TemplateAction) -> anyhow::Result<()> {
                 builtin.to_string()
             } else {
                 anyhow::bail!(
-                    "unknown template: {name}\nRun `vcs-status-daemon template list -n` to see available names."
+                    "unknown template: {name}\nRun `vcs-status-daemon template show -n` to see available names."
                 );
             };
             print!("{}", template::inline_includes(&tmpl));
@@ -502,6 +535,20 @@ fn run_template(action: TemplateAction) -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+        TemplateAction::Set { name, format } => {
+            let (key, value) = match (name, format) {
+                (Some(n), _) => ("template_name", n),
+                (_, Some(f)) => ("format", f),
+                (None, None) => anyhow::bail!("either --name or --format is required"),
+            };
+            run_config(
+                ConfigAction::Set {
+                    key: key.to_string(),
+                    value,
+                },
+                config_file,
+            )?;
         }
     }
     Ok(())
@@ -660,7 +707,7 @@ fn run_clap() -> anyhow::Result<()> {
             run_config(action, cf)?;
         }
         Some(Commands::Template { action }) => {
-            run_template(action)?;
+            run_template(action, cf)?;
         }
         Some(Commands::SetLogFilter { filter }) => {
             client::set_log_filter(&filter)?;
