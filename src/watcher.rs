@@ -157,8 +157,14 @@ impl IgnoreFilter {
     /// Process an event's paths: lazily discover ignore files, then filter.
     ///
     /// Ignore files are incorporated *before* filtering so the matcher is always
-    /// up-to-date. Only working-copy paths (outside `vcs_dir`) are considered.
-    pub fn process_event(&self, vcs_dir: &Path, paths: &[PathBuf]) -> EventVerdict {
+    /// up-to-date. Only working-copy paths (outside VCS dirs) are considered.
+    /// `extra_vcs_dir` is used for colocated jj+git repos where `.git/` is also VCS-internal.
+    pub fn process_event(
+        &self,
+        vcs_dir: &Path,
+        extra_vcs_dir: Option<&Path>,
+        paths: &[PathBuf],
+    ) -> EventVerdict {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         // Phase 1: discover and incorporate any new ignore files before filtering.
@@ -166,7 +172,10 @@ impl IgnoreFilter {
 
         // Phase 2: filter paths.
         let canonical_root = inner.canonical_root.clone();
-        let wc_paths: Vec<&PathBuf> = paths.iter().filter(|p| !p.starts_with(vcs_dir)).collect();
+        let is_vcs_path = |p: &PathBuf| {
+            p.starts_with(vcs_dir) || extra_vcs_dir.is_some_and(|d| p.starts_with(d))
+        };
+        let wc_paths: Vec<&PathBuf> = paths.iter().filter(|p| !is_vcs_path(p)).collect();
 
         if wc_paths.is_empty() {
             return EventVerdict {
@@ -343,6 +352,13 @@ pub fn watch_repo(
         VcsKind::Jj => canonical_root.join(".jj"),
         VcsKind::Git => canonical_root.join(".git"),
     };
+    // Colocated jj+git repos: .git/ paths are also VCS-internal, not working copy.
+    let colocated_git_dir = if vcs_kind == VcsKind::Jj {
+        let git_dir = canonical_root.join(".git");
+        git_dir.exists().then_some(git_dir)
+    } else {
+        None
+    };
     let filter = IgnoreFilter::new(repo_path, vcs_kind);
     let ignored_events = Arc::new(AtomicU64::new(0));
     let ignored_events_cb = ignored_events.clone();
@@ -356,14 +372,27 @@ pub fn watch_repo(
                 return;
             }
 
+            // A path is VCS-internal if it's under the primary VCS dir (.jj/ or .git/)
+            // or under .git/ in a colocated jj+git repo.
+            let is_vcs_internal = |p: &Path| {
+                p.starts_with(&vcs_dir)
+                    || colocated_git_dir
+                        .as_ref()
+                        .is_some_and(|gd| p.starts_with(gd))
+            };
+
             // Classify paths as working copy vs VCS-internal.
-            let working_copy_changed = event.paths.iter().any(|p| !p.starts_with(&vcs_dir));
+            let working_copy_changed = event.paths.iter().any(|p| !is_vcs_internal(p));
             let vcs_change_hint = merge_vcs_hints(&vcs_dir, vcs_kind, &event.paths);
 
             // Lazily discover ignore files and filter paths in one step.
             // Ignore files are incorporated before filtering so the matcher
             // is always up-to-date when we check paths.
-            let verdict = filter.process_event(&vcs_dir, &event.paths);
+            let verdict = filter.process_event(
+                &vcs_dir,
+                colocated_git_dir.as_deref(),
+                &event.paths,
+            );
 
             // Drop events where all working-copy paths are ignored and there's
             // no relevant VCS-internal change.

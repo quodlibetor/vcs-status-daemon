@@ -2453,6 +2453,90 @@ mod tests {
         daemon.await.unwrap().unwrap();
     }
 
+    /// Regression test: `jj bookmark set -r @-- test` on a running daemon should
+    /// NOT change the reported diff stats — only bookmark metadata should update.
+    #[tokio::test]
+    async fn test_daemon_jj_bookmark_set_past_preserves_diffs() {
+        let dir = create_jj_repo().await;
+        let rt = temp_runtime_dir("bm-past");
+        let socket_path = rt.path().join("sock");
+        let config = Config {
+            color: false,
+            format: Some(
+                "files={{ file_mad_count }} lines_added={{ lines_added_total }} bm={{ has_bookmarks }}"
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        // Build history: two committed changes, then WC with one new file
+        std::fs::write(dir.path().join("a.txt"), "aaa\n").unwrap();
+        Command::new("jj")
+            .args(["commit", "-m", "first"])
+            .current_dir(dir.path())
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.path().join("b.txt"), "bbb\n").unwrap();
+        Command::new("jj")
+            .args(["commit", "-m", "second"])
+            .current_dir(dir.path())
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.path().join("c.txt"), "ccc\n").unwrap();
+        // Snapshot so jj sees the file
+        Command::new("jj")
+            .args(["status"])
+            .current_dir(dir.path())
+            .output()
+            .await
+            .unwrap();
+
+        let daemon = tokio::spawn(run_daemon_for_test(config, rt.path().to_path_buf()));
+
+        // Wait for initial status — should show 1 file, 1 line added (just c.txt)
+        let initial = query_until_match(
+            &socket_path,
+            &dir.path().to_string_lossy(),
+            |s| s.contains("files=1") && s.contains("lines_added=1"),
+        )
+        .await;
+        assert!(
+            initial.contains("bm=false"),
+            "should have no bookmarks initially: {initial:?}"
+        );
+
+        // Set a bookmark to a past revision (2 commits back)
+        Command::new("jj")
+            .args(["bookmark", "set", "-r", "@--", "test-bm"])
+            .current_dir(dir.path())
+            .output()
+            .await
+            .unwrap();
+
+        // Wait for bookmark to appear in status
+        let after_bm = query_until_match(
+            &socket_path,
+            &dir.path().to_string_lossy(),
+            |s| s.contains("bm=true"),
+        )
+        .await;
+
+        // Diff stats must be preserved — still 1 file, 1 line added
+        assert!(
+            after_bm.contains("files=1"),
+            "diff stats should be unchanged after bookmark set to past revision: {after_bm:?}"
+        );
+        assert!(
+            after_bm.contains("lines_added=1"),
+            "line stats should be unchanged after bookmark set to past revision: {after_bm:?}"
+        );
+
+        let _ = send_request(&socket_path, &Request::Shutdown).await;
+        daemon.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn test_daemon_query_timeout_waits_for_result() {
         let dir = create_jj_repo().await;

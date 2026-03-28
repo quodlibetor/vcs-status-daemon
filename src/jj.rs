@@ -2257,4 +2257,119 @@ mod tests {
             "should see updated line count from incremental diff"
         );
     }
+
+    /// Regression test: `jj bookmark set -r PAST_CHANGE` should not affect
+    /// the working copy diff stats. The bookmark points to a past revision,
+    /// so the parent tree of the working copy is unchanged.
+    #[tokio::test]
+    async fn test_validate_refresh_jj_bookmark_set_past_revision() {
+        let dir = create_jj_repo().await;
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+
+        // Build some history: create file, commit, create another file
+        std::fs::write(dir.path().join("a.txt"), "aaa\n").unwrap();
+        jj_cmd(dir.path(), &["commit", "-m", "first"]).await;
+        std::fs::write(dir.path().join("b.txt"), "bbb\n").unwrap();
+        jj_cmd(dir.path(), &["commit", "-m", "second"]).await;
+
+        // Working copy: add a new file
+        std::fs::write(dir.path().join("c.txt"), "ccc\n").unwrap();
+        jj_cmd(dir.path(), &["status"]).await; // snapshot
+
+        // Full refresh — should see 1 file, 1 line added (only c.txt)
+        let jj_worker = spawn_jj_worker();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        jj_worker
+            .send(JjWorkerRequest::FullRefresh {
+                repo_path: dir.path().to_path_buf(),
+                depth: config.bookmark_search_depth,
+                reply: reply_tx,
+            })
+            .unwrap();
+        let status = reply_rx.await.unwrap().unwrap();
+        let original_file_count = status.file_mad_count_working_tree;
+        let original_lines_added = status.lines_added_working_tree;
+        assert_eq!(original_file_count, 1, "only c.txt should be changed");
+        assert_eq!(original_lines_added, 1, "only 1 line added");
+
+        // Set a bookmark to the past "first" revision (@ is 2 commits ahead)
+        jj_cmd(
+            dir.path(),
+            &["bookmark", "set", "-r", "@--", "test-bm"],
+        )
+        .await;
+
+        // ValidateAndRefresh — parent tree should be unchanged
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        jj_worker
+            .send(JjWorkerRequest::ValidateAndRefresh {
+                repo_path: dir.path().to_path_buf(),
+                changed_paths: vec![],
+                depth: config.bookmark_search_depth,
+                reply: reply_tx,
+            })
+            .unwrap();
+        let status = reply_rx.await.unwrap().unwrap();
+
+        // Bookmark should appear in metadata
+        assert!(
+            status.bookmarks.iter().any(|b| b.name == "test-bm"),
+            "bookmark should appear after set"
+        );
+
+        // Diff stats must NOT change — the bookmark is on a past revision,
+        // not the working copy's parent
+        assert_eq!(
+            status.file_mad_count_working_tree, original_file_count,
+            "diff stats should be unchanged after bookmark set to past revision"
+        );
+        assert_eq!(
+            status.lines_added_working_tree, original_lines_added,
+            "line stats should be unchanged after bookmark set to past revision"
+        );
+    }
+
+    /// Regression test: full refresh after `jj bookmark set -r PAST` should
+    /// still show correct diff stats (only WC changes, not the entire history).
+    #[tokio::test]
+    async fn test_full_refresh_after_jj_bookmark_set_past_revision() {
+        let dir = create_jj_repo().await;
+        let config = Config {
+            color: false,
+            ..Default::default()
+        };
+
+        // Build history
+        std::fs::write(dir.path().join("a.txt"), "aaa\n").unwrap();
+        jj_cmd(dir.path(), &["commit", "-m", "first"]).await;
+        std::fs::write(dir.path().join("b.txt"), "bbb\n").unwrap();
+        jj_cmd(dir.path(), &["commit", "-m", "second"]).await;
+
+        // Working copy: add a new file
+        std::fs::write(dir.path().join("c.txt"), "ccc\n").unwrap();
+        jj_cmd(dir.path(), &["status"]).await; // snapshot
+
+        // Full refresh before bookmark
+        let status_before = query_jj_status(dir.path(), &config).await.unwrap();
+        let files_before = status_before.file_mad_count_working_tree;
+        let lines_before = status_before.lines_added_working_tree;
+
+        // Set a bookmark to a past revision
+        jj_cmd(dir.path(), &["bookmark", "set", "-r", "@--", "test-bm"]).await;
+
+        // Full refresh after bookmark
+        let status_after = query_jj_status(dir.path(), &config).await.unwrap();
+
+        assert_eq!(
+            status_after.file_mad_count_working_tree, files_before,
+            "full refresh after bookmark set should show same file count"
+        );
+        assert_eq!(
+            status_after.lines_added_working_tree, lines_before,
+            "full refresh after bookmark set should show same line count"
+        );
+    }
 }
