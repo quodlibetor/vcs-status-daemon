@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tera::Tera;
 
 /// Shared detail template — included by ascii, nerdfont, and unicode templates.
@@ -62,7 +62,7 @@ pub const NOT_READY_ASCII: &str = include_str!("templates/not_ready.tera");
 pub const NOT_READY_NERDFONT: &str = include_str!("templates/not_ready.tera");
 
 /// Tracking status of a bookmark relative to its remote counterpart.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackingStatus {
     /// No tracked remote bookmark, or not applicable (git).
@@ -78,7 +78,7 @@ pub enum TrackingStatus {
     Sideways,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Bookmark {
     pub name: String,
     pub distance: u32,
@@ -95,7 +95,7 @@ pub struct Bookmark {
 /// a new metadata field here, you must also update that function to propagate it.
 /// Diff stats fields (lines_added_*, file_mad_count_*, etc.) are managed by the
 /// incremental overlay and should NOT be copied there.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoStatus {
     // VCS type flags
     pub is_jj: bool,
@@ -292,7 +292,10 @@ fn build_tera(template: &str, color: bool) -> Result<Tera, tera::Error> {
     Ok(tera)
 }
 
-pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String {
+/// Build the Tera template context for a `RepoStatus`.
+///
+/// This is the exact set of variables available to templates.
+fn build_template_context(status: &RepoStatus) -> tera::Context {
     let mut ctx = tera::Context::new();
 
     // VCS type
@@ -375,12 +378,168 @@ pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String
     ctx.insert("refresh_error", &status.refresh_error);
     ctx.insert("git_head_diverged", &status.git_head_diverged);
 
+    ctx
+}
+
+pub fn format_status(status: &RepoStatus, template: &str, color: bool) -> String {
+    let ctx = build_template_context(status);
+
     match build_tera(template, color) {
         Ok(tera) => match tera.render("tpl", &ctx) {
             Ok(rendered) => rendered.trim().to_string(),
             Err(e) => format!("template error: {}", format_tera_error(&e)),
         },
         Err(e) => format!("template error: {}", format_tera_error(&e)),
+    }
+}
+
+/// Return the template variables for a `RepoStatus` as a JSON object.
+///
+/// This includes derived variables (`change_id_prefix`, `has_bookmarks`, etc.)
+/// that are available in templates but not directly on the struct.
+pub fn template_variables(status: &RepoStatus) -> serde_json::Value {
+    build_template_context(status).into_json()
+}
+
+/// Result of annotating a template with variable values.
+pub struct DebugTemplateOutput {
+    /// The template source with variable values annotated inline.
+    pub annotated: String,
+    /// Variables available in the template context but not referenced in the template,
+    /// sorted by name. Each entry is `(name, formatted_value)`.
+    pub unused: Vec<(String, String)>,
+}
+
+/// Annotate a template with current variable values for debugging.
+///
+/// Uses a regex to find every identifier in the template and, if it matches
+/// a known template variable, appends `=value` in a distinct color inline.
+/// Also returns any template variables that were not referenced.
+pub fn debug_template(status: &RepoStatus, template: &str, color: bool) -> DebugTemplateOutput {
+    use regex::Regex;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::LazyLock;
+
+    // Alternation: match string literals (group 1) to skip them, then identifiers (group 2).
+    // String literals are consumed first so their contents are never matched as variables.
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\b([a-z_][a-z0-9_]*)\b"#).unwrap()
+    });
+
+    let resolved = inline_includes(template);
+
+    // Build lookup map from template context
+    let ctx_json = build_template_context(status).into_json();
+    let vars: HashMap<&str, &serde_json::Value> = match &ctx_json {
+        serde_json::Value::Object(map) => map.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+        _ => HashMap::new(),
+    };
+
+    let val_open = if color { "\x1b[94m" } else { "" }; // bright blue
+    let val_close = if color { "\x1b[0m" } else { "" };
+
+    // Tera keywords / filter names that should not be annotated
+    let skip: &[&str] = &[
+        "set",
+        "if",
+        "elif",
+        "else",
+        "endif",
+        "for",
+        "in",
+        "endfor",
+        "include",
+        "block",
+        "endblock",
+        "macro",
+        "endmacro",
+        "raw",
+        "endraw",
+        "filter",
+        "endfilter",
+        "not",
+        "and",
+        "or",
+        "true",
+        "false",
+        "is",
+        "as",
+        // Color filters
+        "bold",
+        "dim",
+        "italic",
+        "underline",
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "bright_black",
+        "bright_red",
+        "bright_green",
+        "bright_yellow",
+        "bright_blue",
+        "bright_magenta",
+        "bright_cyan",
+        "bright_white",
+    ];
+
+    let mut used = HashSet::new();
+
+    let annotated = RE
+        .replace_all(&resolved, |caps: &regex::Captures| {
+            // Group 1: string literal — pass through unchanged
+            if caps.get(1).is_some() {
+                return caps[0].to_string();
+            }
+            // Group 2: identifier
+            let name = &caps[2];
+            if skip.contains(&name) {
+                return caps[0].to_string();
+            }
+            if let Some(val) = vars.get(name) {
+                used.insert(name.to_string());
+                let display = format_debug_value(val);
+                format!("{name}{val_open}={display}{val_close}")
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .into_owned();
+
+    let mut unused: Vec<(String, String)> = vars
+        .iter()
+        .filter(|(k, _)| !used.contains(**k))
+        .map(|(k, v)| (k.to_string(), format_debug_value(v)))
+        .collect();
+    unused.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    DebugTemplateOutput { annotated, unused }
+}
+
+/// Format a JSON value for inline debug display.
+fn format_debug_value(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::String(s) if s.is_empty() => "\"\"".to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) if arr.is_empty() => "[]".to_string(),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr
+                .iter()
+                .map(|v| {
+                    if let Some(d) = v.get("display") {
+                        d.as_str().unwrap_or(&v.to_string()).to_string()
+                    } else {
+                        v.to_string()
+                    }
+                })
+                .collect();
+            format!("[{}]", items.join(", "))
+        }
+        other => other.to_string(),
     }
 }
 

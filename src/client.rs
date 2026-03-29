@@ -281,6 +281,7 @@ pub fn status(verbose: bool) -> Result<()> {
             incremental_diff_stats,
             dir_diff_stats,
             warnings,
+            repo_template_vars,
         }) => {
             let hours = uptime_secs / 3600;
             let mins = (uptime_secs % 3600) / 60;
@@ -405,6 +406,42 @@ pub fn status(verbose: bool) -> Result<()> {
                 eprintln!("  warnings:");
                 for w in &warnings {
                     eprintln!("    ⚠ {w}");
+                }
+            }
+
+            if !repo_template_vars.is_empty() {
+                for (repo, vars) in &repo_template_vars {
+                    eprintln!();
+                    eprintln!("  template variables for {repo}:");
+                    if let serde_json::Value::Object(map) = vars {
+                        // Find longest key for alignment
+                        let max_key = map.keys().map(|k| k.len()).max().unwrap_or(0);
+                        for (key, val) in map {
+                            let display = match val {
+                                serde_json::Value::String(s) if s.is_empty() => "\"\"".to_string(),
+                                serde_json::Value::String(s) => format!("\"{s}\""),
+                                serde_json::Value::Array(arr) if arr.is_empty() => "[]".to_string(),
+                                serde_json::Value::Array(arr) => {
+                                    // Format bookmark arrays more readably
+                                    let items: Vec<String> = arr
+                                        .iter()
+                                        .map(|v| {
+                                            if let Some(name) = v.get("display") {
+                                                name.to_string()
+                                            } else {
+                                                v.to_string()
+                                            }
+                                        })
+                                        .collect();
+                                    format!("[{}]", items.join(", "))
+                                }
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::Bool(b) => b.to_string(),
+                                other => other.to_string(),
+                            };
+                            eprintln!("    {key:<max_key$}  {display}");
+                        }
+                    }
                 }
             }
 

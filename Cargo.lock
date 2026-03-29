@@ -4300,6 +4300,7 @@ dependencies = [
  "jj-lib",
  "notify",
  "pollster",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

@@ -64,6 +64,9 @@ pub enum Response {
         /// Per-repo warnings (e.g. colocated git HEAD diverged from jj).
         #[serde(default)]
         warnings: Vec<String>,
+        /// Per-repo template variable values (only populated when verbose=true).
+        #[serde(default)]
+        repo_template_vars: Vec<(String, serde_json::Value)>,
     },
     Version {
         version: String,

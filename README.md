@@ -193,6 +193,7 @@ vcs-status-daemon template print NAME                # print raw template source
 vcs-status-daemon template format "{{ change_id }}"  # test a custom template
 vcs-status-daemon template set --name nerdfont       # set active template by name (alias for config set)
 vcs-status-daemon template set --format "{{ ... }}"  # set an inline format template (alias for config set)
+vcs-status-daemon template debug [--repo PATH]       # show template with variable values annotated inline
 
 # Restart the daemon (graceful shutdown + restart)
 vcs-status-daemon restart
@@ -411,6 +412,8 @@ minimal = "{{ commit_id }} {{ description }}"
 User templates take priority over built-in ones — you can override `ascii` or `nerdfont` with your own version.
 
 Use `vcs-status-daemon template print <name>` to view the raw source of any template (includes are inlined automatically). This is a good starting point for writing your own.
+
+Use `vcs-status-daemon template debug` to see the current template with each variable's value annotated inline (e.g. `{{ change_id_prefix=su | magenta }}`), plus a list of available variables not used by the template.
 
 The built-in `ascii`, `nerdfont`, and `unicode` templates all share the same body (`detail.tera`) and differ only in their icon constants. You can use the same pattern in your own templates — set icon variables with `{% set %}` and then `{% include "detail.tera" %}`:
 

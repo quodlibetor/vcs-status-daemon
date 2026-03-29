@@ -157,6 +157,12 @@ enum TemplateAction {
         /// Run `template show -n` to see available names.
         name: String,
     },
+    /// Show the current template with variable values annotated inline
+    Debug {
+        /// Path to a repository (defaults to current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+    },
     /// Set the active template by name or inline format string
     #[command(group(clap::ArgGroup::new("template_set").required(true)))]
     Set {
@@ -533,6 +539,38 @@ fn run_template(action: TemplateAction, config_file: Option<&Path>) -> anyhow::R
                         eprintln!();
                         eprintln!("  (could not query repo: {e})");
                     }
+                }
+            }
+        }
+        TemplateAction::Debug { repo } => {
+            let cfg = config::load_config()?;
+            let tmpl = cfg.resolved_format();
+            let repo_path = repo
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default();
+
+            match query_live_status(&repo_path) {
+                Ok(status) => {
+                    let rendered = template::format_status(&status, &tmpl, color);
+                    eprintln!("\x1b[1mRendered:\x1b[0m  {rendered}");
+                    eprintln!();
+                    let debug = template::debug_template(&status, &tmpl, color);
+                    eprint!("{}", debug.annotated);
+                    if !debug.unused.is_empty() {
+                        eprintln!();
+                        eprintln!();
+                        eprintln!("\x1b[1mUnused variables:\x1b[0m");
+                        let max_key = debug.unused.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+                        for (name, val) in &debug.unused {
+                            eprintln!("  {name:<max_key$}  {val}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("(could not query repo: {e})");
+                    eprintln!();
+                    // Still show the template source without annotations
+                    eprint!("{}", template::inline_includes(&tmpl));
                 }
             }
         }

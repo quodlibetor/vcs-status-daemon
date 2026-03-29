@@ -178,9 +178,8 @@ impl IgnoreFilter {
 
         // Phase 2: filter paths.
         let canonical_root = inner.canonical_root.clone();
-        let is_vcs_path = |p: &PathBuf| {
-            p.starts_with(vcs_dir) || extra_vcs_dir.is_some_and(|d| p.starts_with(d))
-        };
+        let is_vcs_path =
+            |p: &PathBuf| p.starts_with(vcs_dir) || extra_vcs_dir.is_some_and(|d| p.starts_with(d));
         let wc_paths: Vec<&PathBuf> = paths.iter().filter(|p| !is_vcs_path(p)).collect();
 
         if wc_paths.is_empty() {
@@ -405,11 +404,8 @@ pub fn watch_repo(
             // Lazily discover ignore files and filter paths in one step.
             // Ignore files are incorporated before filtering so the matcher
             // is always up-to-date when we check paths.
-            let verdict = filter.process_event(
-                &vcs_dir,
-                colocated_git_dir.as_deref(),
-                &event.paths,
-            );
+            let verdict =
+                filter.process_event(&vcs_dir, colocated_git_dir.as_deref(), &event.paths);
 
             // Drop events where all working-copy paths are ignored and there's
             // no relevant VCS-internal change.
@@ -587,7 +583,11 @@ mod tests {
             .output()
             .await
             .unwrap();
-        assert!(out.status.success(), "git checkout failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "git checkout failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
 
         // Look for a colocated_git_head_changed event
         let mut found_diverged = false;
@@ -604,7 +604,10 @@ mod tests {
                 _ => break,
             }
         }
-        assert!(found_diverged, "expected colocated_git_head_changed event after git checkout");
+        assert!(
+            found_diverged,
+            "expected colocated_git_head_changed event after git checkout"
+        );
     }
 
     #[tokio::test]

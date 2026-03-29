@@ -2303,11 +2303,7 @@ mod tests {
         assert_eq!(original_lines_added, 1, "only 1 line added");
 
         // Set a bookmark to the past "first" revision (@ is 2 commits ahead)
-        jj_cmd(
-            dir.path(),
-            &["bookmark", "set", "-r", "@--", "test-bm"],
-        )
-        .await;
+        jj_cmd(dir.path(), &["bookmark", "set", "-r", "@--", "test-bm"]).await;
 
         // ValidateAndRefresh — parent tree should be unchanged
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

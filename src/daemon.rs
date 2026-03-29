@@ -658,6 +658,19 @@ async fn handle_connection(
                     )
                 })
                 .collect();
+            let repo_template_vars: Vec<(String, serde_json::Value)> = if verbose {
+                st.cache
+                    .iter()
+                    .map(|(repo, (status, _))| {
+                        (
+                            repo.to_string_lossy().to_string(),
+                            crate::template::template_variables(status),
+                        )
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let jj_w = st.jj_worker.clone();
             let git_w = st.git_worker.clone();
             drop(st);
@@ -720,6 +733,7 @@ async fn handle_connection(
                     incremental_diff_stats,
                     dir_diff_stats,
                     warnings,
+                    repo_template_vars,
                 },
             )
             .await
@@ -2667,11 +2681,9 @@ mod tests {
         let daemon = tokio::spawn(run_daemon_for_test(config, rt.path().to_path_buf()));
 
         // Wait for initial status — should show 1 file, 1 line added (just c.txt)
-        let initial = query_until_match(
-            &socket_path,
-            &dir.path().to_string_lossy(),
-            |s| s.contains("files=1") && s.contains("lines_added=1"),
-        )
+        let initial = query_until_match(&socket_path, &dir.path().to_string_lossy(), |s| {
+            s.contains("files=1") && s.contains("lines_added=1")
+        })
         .await;
         assert!(
             initial.contains("bm=false"),
@@ -2687,11 +2699,9 @@ mod tests {
             .unwrap();
 
         // Wait for bookmark to appear in status
-        let after_bm = query_until_match(
-            &socket_path,
-            &dir.path().to_string_lossy(),
-            |s| s.contains("bm=true"),
-        )
+        let after_bm = query_until_match(&socket_path, &dir.path().to_string_lossy(), |s| {
+            s.contains("bm=true")
+        })
         .await;
 
         // Diff stats must be preserved — still 1 file, 1 line added
@@ -3038,9 +3048,7 @@ mod tests {
         let socket_path = rt.path().join("sock");
         let config = Config {
             color: false,
-            format: Some(
-                "diverged={{ git_head_diverged }} files={{ file_mad_count }}".to_string(),
-            ),
+            format: Some("diverged={{ git_head_diverged }} files={{ file_mad_count }}".to_string()),
             ..Default::default()
         };
 
@@ -3072,11 +3080,9 @@ mod tests {
         let daemon = tokio::spawn(run_daemon_for_test(config, rt.path().to_path_buf()));
 
         // Wait for initial status — should show diverged=false, files=0
-        let initial = query_until_match(
-            &socket_path,
-            &dir.path().to_string_lossy(),
-            |s| s.contains("diverged=false") && s.contains("files=0"),
-        )
+        let initial = query_until_match(&socket_path, &dir.path().to_string_lossy(), |s| {
+            s.contains("diverged=false") && s.contains("files=0")
+        })
         .await;
         assert!(
             initial.contains("diverged=false"),
@@ -3098,11 +3104,9 @@ mod tests {
         );
 
         // Wait for git_head_diverged to become true
-        let diverged = query_until_match(
-            &socket_path,
-            &dir.path().to_string_lossy(),
-            |s| s.contains("diverged=true"),
-        )
+        let diverged = query_until_match(&socket_path, &dir.path().to_string_lossy(), |s| {
+            s.contains("diverged=true")
+        })
         .await;
         assert!(
             diverged.contains("diverged=true"),
@@ -3118,11 +3122,9 @@ mod tests {
             .unwrap();
 
         // Wait for diverged to clear
-        let reconciled = query_until_match(
-            &socket_path,
-            &dir.path().to_string_lossy(),
-            |s| s.contains("diverged=false"),
-        )
+        let reconciled = query_until_match(&socket_path, &dir.path().to_string_lossy(), |s| {
+            s.contains("diverged=false")
+        })
         .await;
         assert!(
             reconciled.contains("diverged=false"),
