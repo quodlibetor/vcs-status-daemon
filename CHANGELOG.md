@@ -1,3 +1,48 @@
+# Unreleased
+
+Incremental diff improvements, colocated jj+git fixes, template debugging, and
+bookmark limiting.
+
+**Bookmark limiting**
+- **`limit_bookmarks` template filter**: new Tera filter that truncates bookmark
+  lists with a "(+N more)" indicator. Accepts `count` (max visible) and optional
+  `prioritize` (glob pattern to sort matching bookmarks first, e.g. `bwm/*`).
+- **`[template.vars]` config table**: user-defined variables injected into the
+  Tera rendering context. Use `max_bookmarks` and `prioritize_branches` to
+  control bookmark limiting in built-in templates.
+- **auto-applied in built-in templates**: all templates that iterate bookmarks
+  (detail, gitstatus, ohmyzsh, starship) conditionally apply `limit_bookmarks`
+  when the `max_bookmarks` template var is set.
+
+**Config restructure**
+- **`[template]` table**: `template_name`, `format`, and `not_ready_format` are
+  now nested under `[template]` as `name`, `format`, and `not_ready_format`.
+  This is a **breaking change** — old flat keys will produce a config error.
+- **`config set`/`config get` dotted keys**: `config set template.name nerdfont`,
+  `config set template.vars.max_bookmarks 3`, etc.
+
+**Performance**
+- **fine-grained incremental diff invalidation**: file watcher events now
+  update only the affected files in the diff overlay instead of recomputing
+  the entire diff, significantly reducing refresh cost for large repos.
+
+**Bug fixes**
+- **colocated jj+git repos**: `.git/` internal paths are no longer treated
+  as working copy changes, fixing spurious diff recalculations.
+- **colocated git checkout detection**: when an external `git checkout`
+  changes HEAD in a colocated jj repo, the status now shows a diverged
+  indicator prompting the user to run a jj command to reconcile.
+
+**Template debugging**
+- **`template debug`**: new subcommand that shows the current template with
+  each variable's value annotated inline (e.g. `{{ change_id_prefix=su | magenta }}`),
+  plus a list of available variables not referenced by the template.
+
+**Observability**
+- **`status --verbose` template variables**: verbose status output now
+  includes per-repo template variable values, showing the full rendering
+  context for each watched repository.
+
 # v0.0.11
 
 Shell completions, broader shell support, and improved template CLI.
