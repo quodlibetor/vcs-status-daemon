@@ -1,4 +1,4 @@
-# Unreleased
+# v0.0.12
 
 Incremental diff improvements, colocated jj+git fixes, template debugging, and
 bookmark limiting.
