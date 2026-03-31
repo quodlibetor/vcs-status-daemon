@@ -1,3 +1,7 @@
+# v0.0.13
+
+* Remove colocated git checkout detection. It is not ready for prime time.
+
 # v0.0.12
 
 Incremental diff improvements, colocated jj+git fixes, template debugging, and
